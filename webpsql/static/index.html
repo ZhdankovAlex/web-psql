@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Терминал · web-psql</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐘</text></svg>">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/nav.js"></script>
+</head>
+<body>
+<aside class="sidenav">
+  <a class="brand" href="/" title="web-psql">
+    <span class="brand-ic" aria-hidden="true">🐘</span><span class="nav-label">web-psql</span>
+  </a>
+  <nav>
+    <a href="/" class="on" title="Терминал"><span class="nav-ic" aria-hidden="true">⌨️</span><span class="nav-label">Терминал</span></a>
+    <a href="/sessions" title="Сессии"><span class="nav-ic" aria-hidden="true">🗂️</span><span class="nav-label">Сессии</span></a>
+  </nav>
+  <div class="sidenav-foot">
+    <div class="status-pill busy" id="st-conn" title="Соединение с сервером"><i class="dot-st"></i><span class="nav-label" id="st-conn-text">подключение…</span></div>
+    <div class="status-pill" id="st-db" title="Своя копия учебной базы"><i class="dot-st"></i><span class="nav-label" id="st-db-text">копия базы…</span></div>
+    <button class="nav-toggle" id="nav-toggle" type="button" title="Свернуть / развернуть панель" aria-label="Свернуть / развернуть панель">
+      <span class="nav-ic" aria-hidden="true">«</span><span class="nav-label">Свернуть</span>
+    </button>
+  </div>
+</aside>
+<main><div class="page">
+  <section class="card hero">
+    <div class="hero-head">
+      <div>
+        <div class="eyebrow">Песочница PostgreSQL</div>
+        <h1>Терминал</h1>
+        <p class="muted">
+          Настоящий <code>psql</code> со своей копией учебной базы <code>bookstore</code>. Удаляйте таблицы,
+          меняйте данные — «Начать заново» вернёт всё как было.
+        </p>
+      </div>
+      <div class="actions">
+        <button class="primary" id="restart" type="button" title="Закрыть psql и получить чистую копию базы">Начать заново</button>
+        <button id="reconnect" type="button" title="Переподключиться к той же сессии">Переподключиться</button>
+      </div>
+    </div>
+    <div class="examples">
+      <span class="muted small">Например:</span>
+      <button class="chip" type="button" data-sql="\dt+">\dt+</button>
+      <button class="chip" type="button" data-sql="\d books">\d books</button>
+      <button class="chip" type="button" data-sql="select * from top_authors;">select * from top_authors;</button>
+      <button class="chip" type="button" data-sql="explain analyze select * from orders where customer_id = 42;">explain analyze …</button>
+      <button class="chip" type="button" data-sql="drop table books cascade;">drop table books cascade;</button>
+    </div>
+  </section>
+
+  <section class="card term-card">
+    <div class="term-bar">
+      <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
+      <span id="term-title">psql — bookstore</span>
+      <span class="spacer"></span>
+      <span>Копировать <kbd>Ctrl+Shift+C</kbd> · вставить <kbd>Ctrl+Shift+V</kbd></span>
+    </div>
+    <div id="terminal"></div>
+  </section>
+</div></main>
+
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit@0.10.0/lib/addon-fit.js"></script>
+<script src="/static/terminal.js"></script>
+</body>
+</html>

@@ -1,0 +1,7 @@
+-- Настройки psql в песочнице (файл передаётся через PSQLRC).
+-- Настоящее имя базы — sbx_<id сессии>; в приглашении показываем понятное «bookstore».
+\set QUIET 1
+\set PROMPT1 '%[%033[1;36m%]bookstore%[%033[0m%]%R%# '
+\set PROMPT2 '%[%033[1;36m%]bookstore%[%033[0m%]%R%# '
+\pset null '∅'
+\set QUIET 0

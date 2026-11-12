@@ -1,0 +1,64 @@
+# Запуск всего стенда: docker compose up --build
+# Затем откройте http://localhost:8000
+#
+# Пароли можно переопределить через .env (POSTGRES_PASSWORD, REDIS_PASSWORD) —
+# обязательно сделайте это, если стенд будет доступен не только вам.
+
+x-redis-url: &redis-url redis://:${REDIS_PASSWORD:-web-psql}@redis:6379/0
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-web-psql}
+    volumes:
+      - ./db/init:/docker-entrypoint-initdb.d:ro
+      - ./db/sql:/sql:ro
+    healthcheck:
+      # по TCP: во время заливки шаблона сервер слушает только unix-сокет,
+      # так что "healthy" наступает, когда данные уже готовы
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:-web-psql}"]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$${REDIS_PASSWORD:-web-psql}\" --no-auth-warning ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-web-psql}
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "webpsql.worker"]
+    # root нужен только чтобы запускать psql от имени пользователя sandbox
+    user: root
+    environment:
+      REDIS_URL: *redis-url
+      ADMIN_DSN: postgresql://postgres:${POSTGRES_PASSWORD:-web-psql}@postgres:5432/postgres
+      PG_HOST: postgres
+      SANDBOX_USER: sandbox
+      MAX_SESSIONS: "10"
+    # потолок для всего, что пользователи запустят через \! в psql
+    pids_limit: 512
+    mem_limit: 1g
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+
+  gateway:
+    build: .
+    restart: unless-stopped
+    environment:
+      REDIS_URL: *redis-url
+    ports:
+      - "8000:8000"
+    depends_on:
+      redis: { condition: service_healthy }
+      worker: { condition: service_started }
