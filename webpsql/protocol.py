@@ -1,16 +1,16 @@
 """Протокол WebSocket ``/ws`` между браузером и gateway, а также модели HTTP-ответов.
 
 Каждое сообщение — JSON-объект с полем ``type`` (:class:`MessageType`).
-Входящие сообщения разбираются в одну из моделей :data:`ClientMessage`
-по значению ``type`` (discriminated union), поэтому неизвестный тип или
-неверные поля отсекаются валидацией, а не ``if``-ами в обработчике.
+По значению ``type`` входящее сообщение проверяется одной из моделей
+:data:`ClientMessage`. Неизвестный тип или неверные поля отсеиваются при проверке,
+а не цепочкой ``if`` в обработчике.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Annotated, Literal, Union
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, TypeAdapter
 
@@ -55,7 +55,7 @@ class CloseMessage(BaseModel):
 
 
 ClientMessage = Annotated[
-    Union[InputMessage, ResizeMessage, CloseMessage],
+    InputMessage | ResizeMessage | CloseMessage,
     Field(discriminator="type"),
 ]
 client_message = TypeAdapter(ClientMessage)
@@ -97,7 +97,7 @@ class ExitMessage(BaseModel):
     )
 
 
-ServerMessage = Union[SessionMessage, OutputMessage, ErrorMessage, ExitMessage]
+ServerMessage = SessionMessage | OutputMessage | ErrorMessage | ExitMessage
 
 
 # --- HTTP ---------------------------------------------------------------------

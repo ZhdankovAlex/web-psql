@@ -23,7 +23,7 @@ class Settings:
     :ivar redis_url: адрес Redis.
     :ivar psql_args: команда, которая запускается в каждом терминале.
     :ivar max_sessions: сколько терминалов одновременно держит один worker.
-    :ivar heartbeat_ttl: через сколько секунд без пульса от gateway сессия считается брошенной.
+    :ivar heartbeat_ttl: сколько секунд ждать браузер после обрыва связи; потом psql завершается.
     :ivar stream_maxlen: сколько последних кусков вывода хранить в потоке (для переподключения).
     :ivar admin_dsn: подключение суперпользователя — worker создаёт им песочницы.
     :ivar pg_host: адрес PostgreSQL для psql.

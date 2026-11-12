@@ -1,8 +1,8 @@
 # Учебная база `bookstore`
 
-Книжный магазин: авторы, книги, покупатели, заказы. Данных достаточно, чтобы
-`EXPLAIN ANALYZE`, индексы и агрегаты показывали что-то осмысленное, и мало, чтобы
-копия базы создавалась за десятки миллисекунд (шаблон весит ~9 МБ).
+Книжный магазин: авторы, книги, покупатели, заказы. Данных достаточно, чтобы на них было
+интересно смотреть планы запросов, пробовать индексы и считать итоги, и при этом мало —
+база весит около 9 МБ, поэтому её копия создаётся за десятки миллисекунд.
 
 ```mermaid
 erDiagram
@@ -58,15 +58,16 @@ erDiagram
 
 ## Откуда берутся данные
 
-- [`db/sql/schema.sql`](../db/sql/schema.sql) — таблицы, индексы, представление, комментарии.
-- [`db/sql/data.sql`](../db/sql/data.sql) — 45 строк справочников вручную, остальное
-  `generate_series` + `random()` с `setseed(0.42)`: у всех получается одна и та же база.
+- [`db/sql/schema.sql`](../db/sql/schema.sql) — таблицы, индексы, представление и описания таблиц.
+- [`db/sql/data.sql`](../db/sql/data.sql) — авторы и книги записаны вручную, покупатели и заказы
+  генерируются случайно. Генератор каждый раз запускается с одним и тем же начальным значением,
+  поэтому у всех получается одна и та же база.
 - [`db/init/00-sandbox-template.sql`](../db/init/00-sandbox-template.sql) выполняется при
-  первом старте контейнера: создаёт роль `sandbox_owner` и базу `bookstore_template`,
-  заливает в неё схему и данные от имени `sandbox_owner` и помечает базу шаблоном
-  (`is_template`, `allow_connections false`).
+  первом запуске PostgreSQL: создаёт базу `bookstore_template`, заливает в неё таблицы и данные
+  и делает её шаблоном, из которого worker копирует базу для каждой сессии.
+  Как устроены права — в [sandbox.md](sandbox.md).
 
-Пересоздать шаблон после правок SQL: `docker compose down -v && docker compose up --build`.
+Если поменяли SQL-файлы, пересоздайте базу: `docker compose down -v && docker compose up --build`.
 
 ## Что попробовать
 
@@ -74,9 +75,9 @@ erDiagram
 \dt+                                         -- таблицы и их размеры
 \d+ orders                                   -- столбцы, индексы, ограничения
 select * from top_authors;
-explain analyze select * from orders where customer_id = 42;   -- Index Scan
-explain analyze select * from orders where status = 'new';     -- Seq Scan: индекса нет
-create index on orders(status);                                -- и снова explain
-begin; delete from order_items; rollback;                      -- транзакции
+explain analyze select * from orders where customer_id = 42;   -- Index Scan: поиск по индексу
+explain analyze select * from orders where status = 'new';     -- Seq Scan: индекса нет, читается вся таблица
+create index on orders(status);                                -- создать индекс и снова сравнить
+begin; delete from order_items; rollback;                      -- удалить и передумать
 drop table books cascade;                                      -- можно: это ваша копия
 ```

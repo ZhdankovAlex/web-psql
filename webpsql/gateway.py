@@ -13,10 +13,10 @@ import asyncio
 import contextlib
 import logging
 import uuid
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import AsyncIterator
 
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
@@ -166,21 +166,21 @@ class Session:
         await self.ws.send_text(message.model_dump_json())
 
     async def heartbeat(self) -> None:
-        """Продлевать ключ-пульс, пока браузер подключён."""
+        """Обновлять отметку «вкладка открыта», пока браузер подключён."""
         ttl = settings.heartbeat_ttl
         while True:
             await self.redis.set(alive_key(self.sid), "1", ex=ttl)
             await asyncio.sleep(max(1, ttl // 3))
 
     async def watch_worker(self) -> None:
-        """Закрыть сессию, если worker перестал продлевать её аренду (упал или перезапущен)."""
+        """Закрыть сессию, если worker перестал обновлять отметку «worker жив» (упал или перезапущен)."""
         while True:
             await asyncio.sleep(OWNER_RENEW)
             status = await self.redis.hget(meta_key(self.sid), "status")
             if status == SessionStatus.RUNNING and not await self.redis.exists(owner_key(self.sid)):
                 log.warning("session %s: worker пропал", self.sid)
                 await self.redis.hset(meta_key(self.sid), mapping={
-                    "status": SessionStatus.LOST, "finished_at": datetime.now(timezone.utc).isoformat(),
+                    "status": SessionStatus.LOST, "finished_at": datetime.now(UTC).isoformat(),
                 })
                 await self.redis.expire(meta_key(self.sid), 300)
                 await self.redis.delete(alive_key(self.sid))
@@ -232,11 +232,11 @@ async def _open_session(redis: aioredis.Redis, cols: str, rows: str) -> str:
     :return: идентификатор новой сессии.
     """
     sid = uuid.uuid4().hex
-    # пульс и сведения ставим до заявки, чтобы worker не счёл сессию брошенной
+    # отметку «вкладка открыта» ставим до заявки, иначе worker сразу закроет сессию
     await redis.set(alive_key(sid), "1", ex=settings.heartbeat_ttl)
     await redis.hset(meta_key(sid), mapping={
         "status": SessionStatus.PENDING, "connections": 0,
-        "cols": cols, "rows": rows, "created_at": datetime.now(timezone.utc).isoformat(),
+        "cols": cols, "rows": rows, "created_at": datetime.now(UTC).isoformat(),
     })
     await redis.expire(meta_key(sid), META_TTL)
     await redis.xadd(CONTROL_STREAM, {"kind": Kind.OPEN, "sid": sid, "cols": cols, "rows": rows})

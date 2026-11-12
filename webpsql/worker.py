@@ -2,8 +2,9 @@
 
 Запуск: ``python -m webpsql.worker``.
 
-Worker читает заявки на открытие сессий из ``term:control`` через consumer group,
-поэтому worker'ов можно поднять несколько — каждая заявка достанется одному из них.
+Worker читает заявки на открытие сессий из ``term:control`` в составе группы читателей
+Redis (consumer group): worker'ов можно запустить несколько, и каждая заявка достанется
+ровно одному из них.
 Дальше сессия живёт на этом worker'е: ввод он читает из ``term:{sid}:in``,
 вывод терминала пишет в ``term:{sid}:out``.
 
@@ -28,7 +29,7 @@ import socket
 import struct
 import subprocess
 import termios
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import redis.asyncio as aioredis
@@ -61,8 +62,8 @@ OUTPUT_TTL = 300
 PSQLRC = Path(__file__).with_name("psqlrc")
 """Настройки psql в песочнице: приглашение ``bookstore=>`` вместо имени копии базы."""
 
-GC_INTERVAL = 60
-"""Как часто (в секундах) искать песочницы, оставшиеся от упавших worker'ов."""
+CLEANUP_INTERVAL = 60
+"""Как часто (в секундах) искать копии баз, оставшиеся от упавших worker'ов."""
 
 
 def _clamp(value: str | int | None, default: int, low: int = 2, high: int = 1000) -> int:
@@ -82,15 +83,16 @@ def _clamp(value: str | int | None, default: int, low: int = 2, high: int = 1000
 
 def _now() -> str:
     """Текущее время в ISO 8601 (UTC) для ``term:{sid}:meta``."""
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 class Terminal:
     """Один psql в одном псевдотерминале, подключённый к своей копии базы.
 
-    Вывод pty читается неблокирующе через ``loop.add_reader`` и кладётся в очередь;
-    отдельная задача забирает из очереди всё накопившееся и пишет одним ``XADD`` —
-    так при потоке вывода (например, большой ``SELECT``) в Redis уходит меньше сообщений.
+    Вывод читается без ожидания: ``loop.add_reader`` вызывает чтение, только когда в pty
+    появились данные. Прочитанное кладётся в очередь, а отдельная задача забирает из неё всё
+    накопившееся и отправляет одним ``XADD`` — так при большом выводе (например, длинный
+    ``SELECT``) в Redis уходит меньше сообщений.
     """
 
     def __init__(
@@ -125,7 +127,7 @@ class Terminal:
         """Создать pty и запустить в нём psql, подключённый к копии базы.
 
         Дочерний процесс получает slave-сторону pty как stdin/stdout/stderr,
-        становится лидером новой сессии (``setsid``) и делает этот pty своим
+        начинает новый сеанс ОС (``setsid``) и делает этот pty своим
         управляющим терминалом — тогда Ctrl+C из браузера доходит до psql как SIGINT.
 
         Окружение psql собирается с нуля: в нём только данные роли сессии, а не
@@ -192,7 +194,7 @@ class Terminal:
         fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, packed)
 
     def _on_readable(self) -> None:
-        """Колбэк event loop: в pty появились данные (или он закрылся)."""
+        """Вызывается, когда в pty появились данные (или он закрылся)."""
         try:
             data = os.read(self.master_fd, READ_CHUNK)
         except BlockingIOError:
@@ -210,7 +212,7 @@ class Terminal:
     # --- задачи сессии -------------------------------------------------------
 
     async def _pump_output(self) -> None:
-        """Переложить вывод pty в поток ``term:{sid}:out`` пачками."""
+        """Отправлять вывод pty в поток ``term:{sid}:out``, объединяя накопившееся в одно сообщение."""
         out = output_stream(self.sid)
         while True:
             first = await self._chunks.get()
@@ -270,21 +272,21 @@ class Terminal:
             data = data[written:]
 
     async def _hold_lease(self) -> None:
-        """Продлевать аренду сессии, пока worker жив.
+        """Обновлять отметку «worker жив», пока сессия работает.
 
-        Если worker упадёт, ключ истечёт через :data:`OWNER_TTL` секунд: gateway закроет
-        сессию в браузере, а сборщик мусора другого worker'а удалит копию базы.
+        Если worker упадёт, отметка исчезнет через :data:`OWNER_TTL` секунд: gateway закроет
+        сессию в браузере, а другой worker при уборке удалит её копию базы.
         """
         while True:
             await self.redis.set(owner_key(self.sid), self.worker, ex=OWNER_TTL)
             await asyncio.sleep(OWNER_RENEW)
 
     async def _watch_heartbeat(self) -> None:
-        """Завершить сессию, если gateway перестал присылать пульс (вкладку закрыли)."""
+        """Завершить сессию, если пропала отметка «вкладка открыта» (вкладку закрыли)."""
         while True:
             await asyncio.sleep(5)
             if not await self.redis.exists(alive_key(self.sid)):
-                log.info("session %s: нет пульса, закрываю", self.sid)
+                log.info("session %s: вкладка закрыта, завершаю", self.sid)
                 return
 
     # --- жизненный цикл ------------------------------------------------------
@@ -292,7 +294,7 @@ class Terminal:
     async def run(self) -> None:
         """Создать копию базы, запустить psql и обслуживать сессию до её завершения."""
         loop = asyncio.get_running_loop()
-        # аренду берём до создания базы, чтобы сборщик мусора не принял её за брошенную
+        # отметку ставим до создания базы, иначе уборка сочтёт новую копию забытой и удалит
         lease = asyncio.create_task(self._hold_lease())
         try:
             sandbox = await self.sandboxes.create(self.sid)
@@ -327,7 +329,7 @@ class Terminal:
         for task in stoppers:
             task.cancel()
         code = await self._terminate()
-        # psql завершён — дочитываем остаток вывода, прежде чем сообщить о выходе
+        # psql завершён — отправляем остаток вывода, а потом сообщаем о выходе
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(pump, timeout=2)
         pump.cancel()
@@ -381,7 +383,7 @@ class Terminal:
                 os.close(self.master_fd)
         try:
             await self.sandboxes.drop(self.sid)
-        except Exception:  # noqa: BLE001 — остатки подберёт сборщик мусора worker'а
+        except Exception:  # noqa: BLE001 — копию удалит фоновая уборка
             log.exception("session %s: не удалось удалить песочницу", self.sid)
         await self.redis.delete(input_stream(self.sid), alive_key(self.sid), owner_key(self.sid))
         await self.redis.expire(output_stream(self.sid), OUTPUT_TTL)
@@ -404,7 +406,7 @@ class Worker:
         self.sandboxes = SandboxManager(cfg.admin_dsn)
 
     async def _ensure_group(self) -> None:
-        """Создать consumer group для ``term:control``, если её ещё нет."""
+        """Создать группу читателей для ``term:control``, если её ещё нет."""
         try:
             await self.redis.xgroup_create(CONTROL_STREAM, WORKERS_GROUP, id="0", mkstream=True)
         except ResponseError as exc:
@@ -433,27 +435,27 @@ class Worker:
         self.sessions[sid] = task
         task.add_done_callback(lambda _t, s=sid: self.sessions.pop(s, None))
 
-    async def _collect_garbage(self) -> None:
-        """Удалять песочницы, у которых нет живой сессии.
+    async def _cleanup_forgotten(self) -> None:
+        """Фоновая уборка: удалять копии баз, у которых не осталось работающей сессии.
 
-        Обычно песочницу удаляет сам :class:`Terminal`, но если worker упал или его
-        перезапустили, базы и роли остаются. Песочница считается брошенной, если её
-        сессия не на этом worker'е и никто не продлевает её аренду.
+        Обычно копию удаляет сам :class:`Terminal`, но если worker упал или его
+        перезапустили, базы и пользователи остаются. Копия считается забытой, если её
+        сессия не на этом worker'е и отметку «worker жив» для неё никто не обновляет.
         """
         while True:
             try:
                 for sid in await self.sandboxes.list_sids():
                     if sid not in self.sessions and not await self.redis.exists(owner_key(sid)):
-                        log.info("gc: брошенная песочница %s", sid)
+                        log.info("уборка: удаляю забытую копию базы %s", sid)
                         await self.sandboxes.drop(sid)
-            except Exception:  # noqa: BLE001 — сборщик не должен ронять worker
-                log.exception("gc: ошибка")
-            await asyncio.sleep(GC_INTERVAL)
+            except Exception:  # noqa: BLE001 — ошибка уборки не должна ронять worker
+                log.exception("уборка: ошибка")
+            await asyncio.sleep(CLEANUP_INTERVAL)
 
     async def run(self) -> None:
         """Главный цикл: читать ``term:control`` и открывать сессии."""
         await self.sandboxes.start()
-        gc_task = asyncio.create_task(self._collect_garbage(), name="sandbox-gc")
+        cleanup_task = asyncio.create_task(self._cleanup_forgotten(), name="sandbox-cleanup")
         await self._ensure_group()
         log.info("worker %s готов, лимит сессий: %d", self.name, self.cfg.max_sessions)
         try:
@@ -471,7 +473,7 @@ class Worker:
                             )
                         await self.redis.xack(CONTROL_STREAM, WORKERS_GROUP, msg_id)
         finally:
-            gc_task.cancel()
+            cleanup_task.cancel()
             await self.sandboxes.close()
 
 

@@ -1,40 +1,46 @@
-# Архитектура
+# Как это устроено
 
 ```mermaid
 flowchart LR
-    B["Браузер<br/>xterm.js"] <-- "WebSocket /ws<br/>JSON" --> G["gateway<br/>FastAPI"]
+    B["Браузер<br/>xterm.js"] <-- "WebSocket, JSON" --> G["gateway<br/>FastAPI"]
     G <-- "Redis Streams" --> R[("Redis")]
-    R <-- "Redis Streams" --> W["worker<br/>asyncio"]
-    W -- "pty" --> P["psql<br/>(пользователь sandbox)"]
-    P -- "роль s_&lt;sid&gt;" --> DB[("PostgreSQL<br/>sbx_&lt;sid&gt;")]
-    W -- "asyncpg, суперпользователь:<br/>CREATE / DROP DATABASE" --> DB
+    R <-- "Redis Streams" --> W["worker"]
+    W -- "псевдотерминал" --> P["psql<br/>(пользователь ОС sandbox)"]
+    P -- "пользователь БД s_&lt;id&gt;" --> DB[("PostgreSQL<br/>база sbx_&lt;id&gt;")]
+    W -- "администратор:<br/>создать и удалить копию" --> DB
 ```
 
-| Компонент | Код | Что делает |
+| Часть | Код | Что делает |
 |---|---|---|
-| gateway | [`webpsql/gateway.py`](../webpsql/gateway.py) | Отдаёт страницы, держит WebSocket, проверяет сообщения браузера моделями из [`protocol.py`](../webpsql/protocol.py), перекладывает их в Redis и обратно. Терминалов не запускает и состояния в памяти не хранит. |
-| worker | [`webpsql/worker.py`](../webpsql/worker.py) | Берёт заявки на сессии, создаёт копию базы ([`sandbox.py`](../webpsql/sandbox.py)), запускает psql в pty, читает его вывод неблокирующе через event loop. |
-| Redis | — | Шина между gateway и worker'ами и хранилище состояния сессий. |
-| PostgreSQL | [`db/`](../db/) | Шаблон `bookstore_template` и по одной копии на сессию. |
+| gateway | [`webpsql/gateway.py`](../webpsql/gateway.py) | Веб-сервер. Отдаёт страницы, держит WebSocket с браузером, проверяет его сообщения по описаниям из [`protocol.py`](../webpsql/protocol.py) и передаёт их через Redis. Сам psql не запускает и ничего не хранит у себя. |
+| worker | [`webpsql/worker.py`](../webpsql/worker.py) | Принимает заявки на сессии, создаёт копию базы ([`sandbox.py`](../webpsql/sandbox.py)), запускает psql в псевдотерминале и пересылает данные между psql и Redis. |
+| Redis | — | Очереди сообщений между gateway и worker'ами и сведения о сессиях. |
+| PostgreSQL | [`db/`](../db/) | Шаблон учебной базы и по одной копии на каждую сессию. |
 
-Worker никого не слушает: он сам подключается к Redis и PostgreSQL. Его можно держать
-рядом с базой, за файрволом, не открывая наружу ни одного порта.
+**Псевдотерминал** (pty) — механизм ОС, благодаря которому программа считает, что работает
+в настоящем окне терминала. Без него psql не показал бы приглашение, не поддерживал бы историю
+команд, автодополнение, Ctrl+C и постраничный просмотр.
 
-## Ключи Redis
+**Redis Streams** — журналы сообщений в Redis: одна сторона дописывает сообщения в конец,
+другая читает их по порядку и помнит, на каком остановилась.
+
+Worker сам подключается к Redis и PostgreSQL и не принимает входящих подключений. Его можно
+держать рядом с базой, не открывая наружу ни одного порта.
+
+## Что лежит в Redis
 
 | Ключ | Тип | Кто пишет → кто читает | Что внутри |
 |---|---|---|---|
-| `term:control` | stream | gateway → worker | заявки `open` (consumer group `workers`) |
-| `term:{sid}:in` | stream | gateway → worker | `input`, `resize`, `close` |
-| `term:{sid}:out` | stream | worker → gateway | `output`, `error`, `exit` |
-| `term:{sid}:alive` | string, TTL 60 с | gateway | пульс браузера |
-| `term:{sid}:owner` | string, TTL 15 с | worker | аренда: worker жив и держит psql |
-| `term:{sid}:meta` | hash | gateway и worker | статус, worker, PID, копия базы, время её создания, окно, число вкладок |
+| `term:control` | поток | gateway → worker | заявки на новые сессии; каждую получает ровно один worker |
+| `term:{id}:in` | поток | gateway → worker | нажатия клавиш, новый размер окна, команда закрыть сессию |
+| `term:{id}:out` | поток | worker → gateway | вывод psql, ошибки, код завершения |
+| `term:{id}:alive` | строка, живёт 60 с | gateway | «вкладка открыта» — gateway обновляет, пока браузер подключён |
+| `term:{id}:owner` | строка, живёт 15 с | worker | «worker жив и держит эту сессию» — worker обновляет каждые 5 с |
+| `term:{id}:meta` | хеш | gateway и worker | статус, имя worker'а, номер процесса psql, имя копии базы и время её создания, размер окна, число вкладок |
 
-Типы сообщений (`Kind`) и статусы сессии (`SessionStatus`) перечислены в
-[`webpsql/streams.py`](../webpsql/streams.py).
+Типы сообщений и статусы сессий перечислены в [`webpsql/streams.py`](../webpsql/streams.py).
 
-## Жизнь сессии
+## Как живёт сессия
 
 ```mermaid
 sequenceDiagram
@@ -44,96 +50,96 @@ sequenceDiagram
     participant W as worker
     participant PG as PostgreSQL
 
-    B->>G: WebSocket /ws?cols=&rows=
-    G->>R: SET alive, HSET meta (pending), XADD term:control open
-    G-->>B: session {id, resumed: false}
-    R-->>W: XREADGROUP term:control
-    W->>R: SET owner (аренда, продлевается каждые 5 с)
-    W->>PG: CREATE ROLE s_sid, CREATE DATABASE sbx_sid TEMPLATE bookstore_template
-    W->>W: openpty + psql от имени sandbox
-    W->>R: HSET meta (running), XADD out
-    loop пока сессия жива
-        B->>G: input / resize
-        G->>R: XADD term:sid:in
-        R-->>W: XREAD → запись в pty
-        W->>R: XADD term:sid:out (пачками)
-        R-->>G: XREAD BLOCK
-        G-->>B: output {data, id}
+    B->>G: открыть WebSocket /ws
+    G->>R: «вкладка открыта», статус «ждёт worker», заявка на сессию
+    G-->>B: session — номер сессии
+    R-->>W: заявку получает один из worker'ов
+    W->>R: «worker жив» (обновляется каждые 5 с)
+    W->>PG: создать пользователя s_id и копию базы sbx_id из шаблона
+    W->>W: запустить psql в псевдотерминале
+    W->>R: статус «работает», приветствие psql
+    loop пока сессия открыта
+        B->>G: нажатия клавиш, размер окна
+        G->>R: в поток ввода
+        R-->>W: записать в псевдотерминал
+        W->>R: вывод psql — в поток вывода
+        R-->>G: новые сообщения
+        G-->>B: output
     end
-    B->>G: close (или вкладку закрыли и пульс истёк)
-    G->>R: XADD in close
-    W->>W: SIGHUP группе процессов psql
-    W->>PG: DROP DATABASE … WITH (FORCE), DROP ROLE
-    W->>R: XADD out exit, HSET meta (exited)
-    G-->>B: exit {code}
+    B->>G: закрыть (или вкладку закрыли, и через 60 с отметка «вкладка открыта» пропала)
+    G->>R: команда закрыть
+    W->>W: завершить psql
+    W->>PG: удалить копию базы и пользователя
+    W->>R: код завершения, статус «завершена»
+    G-->>B: exit
 ```
 
-## Переподключение
+## Если связь пропала
 
-Каждое сообщение `output` несёт `id` — позицию в потоке `term:{sid}:out`. Браузер хранит
-`session` и последний `id` в `sessionStorage`:
+У каждого куска вывода есть номер — его позиция в потоке Redis. Браузер запоминает номер
+сессии и номер последнего полученного куска:
 
-- **обрыв связи** — переподключается с `?session=…&last=<id>` и получает только пропущенное;
-- **перезагрузка страницы** — экран пуст, поэтому просит поток с начала (`last=0-0`)
-  и восстанавливает всё, что было на экране;
-- **вкладку закрыли** — gateway перестаёт продлевать `alive`; через 60 секунд worker
-  завершает psql и удаляет копию базы.
+- **пропала сеть** — браузер переподключается и просит вывод начиная со следующего куска;
+- **страницу перезагрузили** — экран пустой, поэтому браузер просит весь вывод с начала
+  и восстанавливает то, что было на экране;
+- **вкладку закрыли** — отметка «вкладка открыта» перестаёт обновляться, и через 60 секунд
+  worker завершает psql и удаляет копию базы.
 
-psql при переподключении не перезапускается, незакоммиченная транзакция остаётся открытой.
+Пока браузер переподключается, psql продолжает работать: начатая транзакция никуда не денется.
 
 ## Если worker упал
 
-Worker продлевает `term:{sid}:owner` каждые 5 секунд с TTL 15 секунд. Если ключ исчез,
-а сессия числится `running`:
+Worker раз в 5 секунд обновляет отметку «worker жив» для каждой своей сессии, отметка живёт
+15 секунд. Если worker упал, через 15 секунд она пропадает:
 
-- gateway помечает её `lost` и отправляет браузеру `error` + `exit` (проверено: `docker compose kill worker` —
-  браузер узнаёт через ~12 секунд);
-- сборщик мусора любого worker'а (раз в минуту и при старте) удаляет базы `sbx_*`
-  и роли `s_*`, у которых нет аренды.
+- gateway замечает это, помечает сессию «потеряна» и сообщает браузеру. Проверено: после
+  `docker compose kill worker` браузер узнал об этом через ~12 секунд;
+- любой работающий worker раз в минуту (и сразу при запуске) ищет копии баз без такой отметки
+  и удаляет их вместе с пользователями.
 
-## Протокол WebSocket `/ws`
+## Сообщения WebSocket `/ws`
 
-JSON-сообщения с полем `type`. Каждый тип описан Pydantic-моделью в
-[`webpsql/protocol.py`](../webpsql/protocol.py); входящие разбираются по `type`
-(discriminated union), так что сообщение неизвестного типа или с неверными полями
-отбрасывается, а браузер получает `error`.
+Каждое сообщение — JSON с полем `type`. Для каждого типа в
+[`webpsql/protocol.py`](../webpsql/protocol.py) есть описание на Pydantic, и по полю `type`
+gateway выбирает, каким описанием проверять сообщение. Сообщение неизвестного типа или
+с неправильными полями не проходит дальше, а браузер получает `error` с причиной.
 
-| Направление | `type` | Поля |
+| Кто отправляет | `type` | Поля |
 |---|---|---|
-| браузер → сервер | `input` | `data` — символы от xterm.js, до 64 КБ |
-| браузер → сервер | `resize` | `cols`, `rows` (2…1000) |
-| браузер → сервер | `close` | — |
-| сервер → браузер | `session` | `id`, `resumed` |
-| сервер → браузер | `output` | `data`, `id` — позиция в потоке Redis |
-| сервер → браузер | `error` | `message` |
-| сервер → браузер | `exit` | `code` (отрицательный — psql остановлен сигналом или не запускался) |
+| браузер | `input` | `data` — нажатые клавиши или вставленный текст, до 64 КБ |
+| браузер | `resize` | `cols`, `rows` — размер окна, от 2 до 1000 |
+| браузер | `close` | — |
+| сервер | `session` | `id` — номер сессии, `resumed` — подключились ли к уже работающему psql |
+| сервер | `output` | `data` — вывод psql, `id` — номер куска в потоке |
+| сервер | `error` | `message` |
+| сервер | `exit` | `code` — код завершения psql; отрицательный, если psql остановлен сигналом или не запустился |
 
-Параметры подключения: `?cols=&rows=` для новой сессии, `?session=<id>&last=<id>` —
-вернуться к работающей. Ресайз браузер отправляет не чаще раза в 200 мс.
+Новая сессия — `/ws?cols=…&rows=…`. Вернуться к работающей — `/ws?session=<номер>&last=<номер куска>`.
+Размер окна браузер отправляет не чаще раза в 200 мс.
 
 ## HTTP
 
-Swagger — <http://localhost:8000/docs>.
+Описание в Swagger — <http://localhost:8000/docs>.
 
-| Метод | Что возвращает |
+| Запрос | Что возвращает |
 |---|---|
-| `GET /api/sessions` | все сессии, сначала новые; завершённые видны ещё 5 минут |
-| `GET /api/sessions/{id}` | одна сессия, `404` если её нет |
-| `GET /healthz` | `{"redis": true}`, если gateway видит Redis |
+| `GET /api/sessions` | все сессии, новые сверху; завершённые видны ещё 5 минут |
+| `GET /api/sessions/{id}` | одну сессию или `404` |
+| `GET /healthz` | `{"redis": true}`, если сервер видит Redis |
 
 ## Настройки
 
-| Переменная | По умолчанию | Кто читает | Назначение |
+| Переменная | По умолчанию | Кто читает | Зачем |
 |---|---|---|---|
 | `REDIS_URL` | `redis://localhost:6379/0` | оба | адрес Redis |
-| `ADMIN_DSN` | `postgresql://postgres@localhost/postgres` | worker | суперпользователь для CREATE/DROP DATABASE |
+| `ADMIN_DSN` | `postgresql://postgres@localhost/postgres` | worker | администратор PostgreSQL — создаёт и удаляет копии баз |
 | `PG_HOST`, `PG_PORT` | `localhost`, `5432` | worker | куда подключается psql |
-| `PSQL_CMD` | `psql` | worker | команда в терминале |
-| `SANDBOX_USER` | — | worker | пользователь ОС для psql; пусто — от имени worker'а |
-| `SANDBOX_NPROC` | `256` | worker | лимит процессов пользователя `sandbox` |
+| `PSQL_CMD` | `psql` | worker | какую программу запускать в терминале |
+| `SANDBOX_USER` | — | worker | от какого пользователя ОС запускать psql; если пусто — от того же, что и worker |
+| `SANDBOX_NPROC` | `256` | worker | сколько процессов одновременно может запустить этот пользователь |
 | `MAX_SESSIONS` | `10` | worker | сколько терминалов держит один worker |
 | `HEARTBEAT_TTL` | `60` | оба | сколько секунд ждать браузер после обрыва связи |
-| `STREAM_MAXLEN` | `2000` | worker | сколько кусков вывода хранить для переподключения |
+| `STREAM_MAXLEN` | `2000` | worker | сколько последних кусков вывода хранить для переподключения |
 
-В `docker-compose.yml` пароли берутся из `POSTGRES_PASSWORD` и `REDIS_PASSWORD`
-(файл `.env`), по умолчанию — `web-psql`.
+Пароли в `docker-compose.yml` берутся из `POSTGRES_PASSWORD` и `REDIS_PASSWORD` (файл `.env`),
+по умолчанию — `web-psql`.
