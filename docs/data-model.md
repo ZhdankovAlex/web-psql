@@ -1,15 +1,15 @@
-# Учебная база `bookstore`
+# The `bookstore` demo database
 
-Книжный магазин: авторы, книги, покупатели, заказы. Данных достаточно, чтобы на них было
-интересно смотреть планы запросов, пробовать индексы и считать итоги, и при этом мало —
-база весит около 9 МБ, поэтому её копия создаётся за десятки миллисекунд.
+A bookstore: authors, books, customers, orders. There is enough data to make query plans,
+indexes and totals interesting, and little enough — the database is about 9 MB — that a copy is
+created in tens of milliseconds.
 
 ```mermaid
 erDiagram
-    authors ||--o{ books : "пишет"
-    customers ||--o{ orders : "оформляет"
-    orders ||--|{ order_items : "состоит из"
-    books ||--o{ order_items : "входит в"
+    authors ||--o{ books : "writes"
+    customers ||--o{ orders : "places"
+    orders ||--|{ order_items : "consists of"
+    books ||--o{ order_items : "appears in"
 
     authors {
         serial id PK
@@ -42,42 +42,42 @@ erDiagram
         int order_id PK, FK
         int book_id PK, FK
         int qty "check > 0"
-        numeric price "цена на момент заказа"
+        numeric price "price at the time of the order"
     }
 ```
 
-| Таблица | Строк | Индексы, кроме PK |
+| Table | Rows | Indexes besides the primary key |
 |---|---:|---|
 | `authors` | 15 | — |
 | `books` | 30 | `author_id`, `genre` |
 | `customers` | 500 | `email` (unique) |
-| `orders` | 5 000 | `customer_id`, `created_at` |
-| `order_items` | ~10 000 | — |
+| `orders` | 5,000 | `customer_id`, `created_at` |
+| `order_items` | ~10,000 | — |
 
-Представление `top_authors` — десять авторов с наибольшей выручкой без учёта отменённых заказов.
+The `top_authors` view lists the ten authors with the highest revenue, cancelled orders excluded.
 
-## Откуда берутся данные
+## Where the data comes from
 
-- [`db/sql/schema.sql`](../db/sql/schema.sql) — таблицы, индексы, представление и описания таблиц.
-- [`db/sql/data.sql`](../db/sql/data.sql) — авторы и книги записаны вручную, покупатели и заказы
-  генерируются случайно. Генератор каждый раз запускается с одним и тем же начальным значением,
-  поэтому у всех получается одна и та же база.
-- [`db/init/00-sandbox-template.sql`](../db/init/00-sandbox-template.sql) выполняется при
-  первом запуске PostgreSQL: создаёт базу `bookstore_template`, заливает в неё таблицы и данные
-  и делает её шаблоном, из которого worker копирует базу для каждой сессии.
-  Как устроены права — в [sandbox.md](sandbox.md).
+- [`db/sql/schema.sql`](../db/sql/schema.sql) — tables, indexes, the view and table descriptions.
+- [`db/sql/data.sql`](../db/sql/data.sql) — authors and books are written by hand, customers and
+  orders are generated randomly. The generator always starts from the same seed, so everyone
+  gets the same database.
+- [`db/init/00-sandbox-template.sql`](../db/init/00-sandbox-template.sql) runs on the first
+  PostgreSQL start: it creates the `bookstore_template` database, loads the tables and data into
+  it and turns it into the template the worker copies for every session. How the permissions
+  work is in [sandbox.md](sandbox.md).
 
-Если поменяли SQL-файлы, пересоздайте базу: `docker compose down -v && docker compose up --build`.
+If you change the SQL files, recreate the database: `docker compose down -v && docker compose up --build`.
 
-## Что попробовать
+## Things to try
 
 ```sql
-\dt+                                         -- таблицы и их размеры
-\d+ orders                                   -- столбцы, индексы, ограничения
+\dt+                                         -- tables and their sizes
+\d+ orders                                   -- columns, indexes, constraints
 select * from top_authors;
-explain analyze select * from orders where customer_id = 42;   -- Index Scan: поиск по индексу
-explain analyze select * from orders where status = 'new';     -- Seq Scan: индекса нет, читается вся таблица
-create index on orders(status);                                -- создать индекс и снова сравнить
-begin; delete from order_items; rollback;                      -- удалить и передумать
-drop table books cascade;                                      -- можно: это ваша копия
+explain analyze select * from orders where customer_id = 42;   -- Index Scan: lookup by index
+explain analyze select * from orders where status = 'new';     -- Seq Scan: no index, the whole table is read
+create index on orders(status);                                -- create an index and compare again
+begin; delete from order_items; rollback;                      -- delete, then change your mind
+drop table books cascade;                                      -- go ahead: it is your copy
 ```

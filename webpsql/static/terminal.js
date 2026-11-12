@@ -1,6 +1,6 @@
-// Терминал в браузере: xterm.js <-> WebSocket /ws.
-// Идентификатор сессии и позиция в потоке вывода хранятся в sessionStorage,
-// поэтому после перезагрузки страницы или обрыва связи psql продолжается с того же места.
+// Terminal in the browser: xterm.js <-> WebSocket /ws.
+// The session id and the position in the output stream are kept in sessionStorage,
+// so after a page reload or a dropped connection psql carries on where it was.
 
 (() => {
   "use strict";
@@ -42,8 +42,8 @@
 
   let ws = null;
   let retries = 0;
-  let finished = false; // psql завершился — автоматически не переподключаемся
-  let pageFresh = true; // экран пуст (страницу только что открыли) — нужен весь вывод сессии
+  let finished = false; // psql has exited — do not reconnect automatically
+  let pageFresh = true; // the screen is empty (page just opened) — we need the whole session output
 
   function pill(id, text, cls) {
     $(id + "-text").textContent = text;
@@ -54,24 +54,24 @@
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
   }
 
-  // Сведения о копии базы приходят от worker'а чуть позже, чем ответ gateway, — опрашиваем недолго.
+  // The worker reports the database copy a little later than the gateway answers, so poll briefly.
   async function showSandbox(sid) {
-    pill("st-db", "копия базы…", "busy");
+    pill("st-db", "database copy…", "busy");
     for (let i = 0; i < 20; i++) {
       try {
         const r = await fetch(`/api/sessions/${sid}`);
         if (r.ok) {
           const s = await r.json();
           if (s.status === "running" && s.sandbox_ms != null) {
-            pill("st-db", `своя копия · ${s.sandbox_ms} мс`, "ok");
+            pill("st-db", `own copy · ${s.sandbox_ms} ms`, "ok");
             return;
           }
           if (s.status === "rejected" || s.status === "exited") break;
         }
-      } catch (e) { /* сеть моргнула — попробуем ещё */ }
+      } catch (e) { /* network hiccup — try again */ }
       await new Promise((r) => setTimeout(r, 300));
     }
-    pill("st-db", "копии базы нет", "bad");
+    pill("st-db", "no database copy", "bad");
   }
 
   function connect() {
@@ -80,14 +80,14 @@
     const sid = sessionStorage.getItem(STORE_SID);
     if (sid) {
       params.set("session", sid);
-      // после перезагрузки страницы экран пуст — просим весь сохранённый вывод
+      // after a page reload the screen is empty — ask for all saved output
       params.set("last", pageFresh ? "0-0" : sessionStorage.getItem(STORE_LAST) || "0-0");
     }
     pageFresh = false;
     const proto = location.protocol === "https:" ? "wss" : "ws";
     const socket = new WebSocket(`${proto}://${location.host}/ws?${params}`);
     ws = socket;
-    pill("st-conn", "подключение…", "busy");
+    pill("st-conn", "connecting…", "busy");
 
     socket.onmessage = (event) => {
       const msg = JSON.parse(event.data);
@@ -95,14 +95,14 @@
         case "session":
           retries = 0;
           if (!msg.resumed) {
-            if (sid) term.write("\r\n\x1b[33m[прежняя сессия закрыта, открыта новая с чистой базой]\x1b[0m\r\n");
+            if (sid) term.write("\r\n\x1b[33m[the previous session has ended, a new one with a clean database is open]\x1b[0m\r\n");
             sessionStorage.setItem(STORE_LAST, "0-0");
           }
           sessionStorage.setItem(STORE_SID, msg.id);
-          pill("st-conn", msg.resumed ? "сессия восстановлена" : "подключено", "ok");
-          $("term-title").textContent = `psql — bookstore · сессия ${msg.id.slice(0, 8)}`;
+          pill("st-conn", msg.resumed ? "session restored" : "connected", "ok");
+          $("term-title").textContent = `psql — bookstore · session ${msg.id.slice(0, 8)}`;
           showSandbox(msg.id);
-          // размер мог измениться, пока соединения не было
+          // the window size may have changed while we were disconnected
           send({ type: "resize", cols: term.cols, rows: term.rows });
           break;
         case "output":
@@ -116,9 +116,9 @@
           finished = true;
           sessionStorage.removeItem(STORE_SID);
           sessionStorage.removeItem(STORE_LAST);
-          term.write(`\r\n\x1b[90m[psql завершён (код ${msg.code}), копия базы удалена. Нажмите «Начать заново»]\x1b[0m\r\n`);
-          pill("st-conn", "сессия завершена", "warn");
-          pill("st-db", "копия удалена", "");
+          term.write(`\r\n\x1b[90m[psql exited (code ${msg.code}), the database copy is deleted. Press “Start over”]\x1b[0m\r\n`);
+          pill("st-conn", "session ended", "warn");
+          pill("st-db", "copy deleted", "");
           break;
       }
     };
@@ -126,20 +126,20 @@
     socket.onclose = () => {
       if (ws !== socket || finished) return;
       if (retries >= MAX_RETRIES) {
-        pill("st-conn", "нет связи", "bad");
+        pill("st-conn", "no connection", "bad");
         return;
       }
       const delay = Math.min(1000 * 2 ** retries, 10000);
       retries += 1;
-      pill("st-conn", `повтор через ${Math.round(delay / 1000)} с`, "bad");
+      pill("st-conn", `retrying in ${Math.round(delay / 1000)} s`, "bad");
       setTimeout(() => { if (ws === socket) connect(); }, delay);
     };
   }
 
   term.onData((data) => send({ type: "input", data }));
 
-  // Ctrl+C уходит в psql (прервать запрос), поэтому копирование и вставка — как в
-  // терминалах Linux: Ctrl+Shift+C / Ctrl+Shift+V (на macOS — Cmd+C / Cmd+V).
+  // Ctrl+C goes to psql (cancels the query), so copy and paste work like in Linux
+  // terminals: Ctrl+Shift+C / Ctrl+Shift+V (Cmd+C / Cmd+V on macOS).
   term.attachCustomKeyEventHandler((event) => {
     if (event.type !== "keydown") return true;
     const key = event.key.toLowerCase();
@@ -151,7 +151,7 @@
       return false;
     }
     if (combo && key === "v") {
-      // term.paste учитывает bracketed paste: многострочный текст не выполнится по строкам раньше времени
+      // term.paste uses bracketed paste: multi-line text is not run line by line too early
       navigator.clipboard.readText().then((text) => term.paste(text)).catch(() => {});
       event.preventDefault();
       return false;
@@ -166,10 +166,10 @@
   });
   window.addEventListener("resize", () => fit.fit());
 
-  // Примеры запросов: вставить в psql и выполнить.
+  // Example queries: type into psql and run.
   document.querySelectorAll("[data-sql]").forEach((btn) => {
     btn.addEventListener("click", () => {
-      send({ type: "input", data: "\x15" + btn.dataset.sql + "\r" }); // Ctrl+U очищает набранную строку
+      send({ type: "input", data: "\x15" + btn.dataset.sql + "\r" }); // Ctrl+U clears what was typed
       term.focus();
     });
   });

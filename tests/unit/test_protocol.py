@@ -1,4 +1,4 @@
-"""Проверка сообщений WebSocket: что пропускаем и что отсеиваем."""
+"""WebSocket message checks: what gets through and what is rejected."""
 
 import json
 
@@ -17,10 +17,10 @@ from webpsql.protocol import (
 
 
 def parse(payload: dict):
-    """Разобрать сообщение так же, как gateway.
+    """Parse a message the same way the gateway does.
 
-    :param payload: сообщение от браузера.
-    :return: модель сообщения.
+    :param payload: message from the browser.
+    :return: message model.
     """
     return client_message.validate_json(json.dumps(payload))
 
@@ -43,12 +43,12 @@ def test_close_is_parsed():
 
 @pytest.mark.parametrize("payload", [
     {"type": "bogus"},
-    {"data": "без типа"},
-    {"type": "input"},                              # нет data
-    {"type": "input", "data": 42},                  # data не строка
-    {"type": "resize", "cols": 99999, "rows": 10},  # окно больше допустимого
+    {"data": "no type"},
+    {"type": "input"},                              # no data
+    {"type": "input", "data": 42},                  # data is not a string
+    {"type": "resize", "cols": 99999, "rows": 10},  # window larger than allowed
     {"type": "resize", "cols": 0, "rows": 10},
-    {"type": "resize", "cols": "широко", "rows": 10},
+    {"type": "resize", "cols": "wide", "rows": 10},
     {"type": "input", "data": "x" * (64 * 1024 + 1)},
 ])
 def test_bad_messages_are_rejected(payload):
@@ -58,7 +58,7 @@ def test_bad_messages_are_rejected(payload):
 
 def test_not_json_is_rejected():
     with pytest.raises(ValidationError):
-        client_message.validate_json("это не JSON")
+        client_message.validate_json("this is not JSON")
 
 
 def test_server_messages_carry_type():
@@ -69,7 +69,7 @@ def test_server_messages_carry_type():
 
 
 def test_session_info_from_redis_strings():
-    """Redis отдаёт всё строками — модель должна привести типы сама."""
+    """Redis returns everything as strings — the model must convert the types itself."""
     info = SessionInfo(
         id="abc", status="running", pid="12", connections="1", cols="80", rows="24",
         created_at="2026-11-12T19:00:00+00:00", sandbox_ms="47",

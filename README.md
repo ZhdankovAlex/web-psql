@@ -2,174 +2,170 @@
 
 [![tests](https://github.com/ZhdankovAlex/web-psql/actions/workflows/tests.yml/badge.svg)](https://github.com/ZhdankovAlex/web-psql/actions/workflows/tests.yml)
 
-Терминал PostgreSQL прямо в браузере. Открываете страницу — получаете настоящий `psql`
-и **свою личную копию учебной базы**. Её можно ломать как угодно: удалять таблицы,
-делать `UPDATE` без `WHERE`, очищать данные. Кнопка «Начать заново» за доли секунды
-выдаёт новую копию с исходными данными.
+A PostgreSQL terminal in the browser. Open the page and you get a real `psql` and
+**your own copy of a demo database**. Break it any way you like: drop tables, run `UPDATE`
+without `WHERE`, wipe the data. The “Start over” button gives you a fresh copy with the
+original data in a fraction of a second.
 
-Это не имитация: в браузере работает тот же `psql`, что и в обычном терминале, со всеми его
-возможностями — историей команд, автодополнением по Tab, Ctrl+C для отмены запроса,
-постраничным просмотром длинных результатов, `\timing`, `\watch`.
+This is not an imitation: the browser runs the same `psql` you use in a regular terminal,
+with everything it can do — command history, Tab completion, Ctrl+C to cancel a query,
+paging through long results, `\timing`, `\watch`.
 
-![Терминал: список таблиц и запрос к представлению top_authors](assets/terminal.png)
+![The terminal: a list of tables and a query on the top_authors view](assets/terminal.png)
 
-## Как запустить
+## Getting started
 
 ```bash
 docker compose up --build
 ```
 
-Откройте <http://localhost:8000>. Нужен только Docker. Поднимутся четыре контейнера:
-PostgreSQL 17, Redis и два сервиса приложения. Учебная база создаётся при первом запуске.
+Open <http://localhost:8000>. All you need is Docker. Four containers start: PostgreSQL 17,
+Redis and the two app services. The demo database is created on the first start.
 
-## Возможности
+## Features
 
-- **У каждой вкладки своя база.** Копия создаётся за 40–60 мс и удаляется, когда сессия
-  закрывается. Что именно можно и чего нельзя — в [docs/sandbox.md](docs/sandbox.md).
-- **Сломать можно только свою копию.** Пользователь работает не под администратором: он не может
-  переключиться на другие базы, запускать программы на сервере через `COPY … PROGRAM`
-  или менять настройки сервера. Команды ОС через `\!` выполняются от отдельного пользователя,
-  которому не видны пароли.
-- **Обрыв связи не страшен.** Если пропала сеть или страницу перезагрузили, psql продолжает
-  работать, а браузер дополучает всё, что пропустил.
-- **Можно запустить несколько копий сервиса.** Например, `docker compose up --scale worker=3` —
-  новые сессии распределятся между ними.
-- **Падение сервиса не остаётся незамеченным.** Если процесс с psql упал, браузер узнаёт
-  об этом примерно за 12 секунд, а оставшиеся копии баз удаляются автоматически.
-- **Страница «Сессии»** показывает все открытые терминалы: где запущен psql, сколько создавалась
-  копия базы, сколько вкладок подключено. Те же данные отдаёт `GET /api/sessions`.
-- **Примеры запросов** запускаются одним кликом. Копировать — `Ctrl+Shift+C`, вставить —
-  `Ctrl+Shift+V`: обычный `Ctrl+C`, как в любом терминале, отменяет запрос.
+- **Every tab gets its own database.** The copy is created in 40–60 ms and dropped when the
+  session ends. What you can and cannot do is in [docs/sandbox.md](docs/sandbox.md).
+- **You can only break your own copy.** The user is not an administrator: they cannot switch
+  to other databases, run programs on the server through `COPY … PROGRAM` or change server
+  settings. OS commands through `\!` run as a separate user who cannot see any passwords.
+- **A dropped connection is not a problem.** If the network drops or the page is reloaded,
+  psql keeps running and the browser receives everything it missed.
+- **You can run several copies of the service.** For example, `docker compose up --scale worker=3` —
+  new sessions are spread between them.
+- **A crashed service does not go unnoticed.** If the process running psql crashes, the browser
+  finds out in about 12 seconds, and the leftover database copies are removed automatically.
+- **The Sessions page** shows every open terminal: where psql runs, how long the database copy
+  took to create, how many tabs are connected. `GET /api/sessions` returns the same data.
+- **Example queries** run with one click. Copy with `Ctrl+Shift+C`, paste with `Ctrl+Shift+V`:
+  plain `Ctrl+C` cancels the query, as in any terminal.
 
-![Песочница: таблица books удалена, customers очищена — в своей копии можно всё](assets/sandbox.png)
+![The sandbox: the books table is dropped and customers is wiped — your copy, your rules](assets/sandbox.png)
 
-## Как это устроено
+## How it works
 
 ```mermaid
 flowchart LR
-    B["Браузер<br/>xterm.js"] <-- "WebSocket" --> G["gateway<br/>FastAPI"]
+    B["Browser<br/>xterm.js"] <-- "WebSocket" --> G["gateway<br/>FastAPI"]
     G <-- "Redis Streams" --> R[("Redis")]
     R <-- "Redis Streams" --> W["worker"]
-    W -- "псевдотерминал" --> P["psql"]
-    P --> DB[("PostgreSQL<br/>своя копия базы<br/>на каждую сессию")]
-    W -- "создаёт и удаляет копии" --> DB
+    W -- "pseudo-terminal" --> P["psql"]
+    P --> DB[("PostgreSQL<br/>own database copy<br/>per session")]
+    W -- "creates and drops copies" --> DB
 ```
 
-Приложение состоит из двух сервисов, которые общаются только через Redis:
+The app is two services that talk to each other only through Redis:
 
-- **gateway** ([`webpsql/gateway.py`](webpsql/gateway.py)) — веб-сервер на FastAPI. Отдаёт
-  страницы и держит WebSocket-соединение с браузером. Проверяет всё, что присылает браузер,
-  и передаёт дальше через Redis. Сам psql не запускает.
-- **worker** ([`webpsql/worker.py`](webpsql/worker.py)) — создаёт копию базы
-  ([`sandbox.py`](webpsql/sandbox.py)) и запускает psql в псевдотерминале — так программа
-  думает, что работает в настоящем терминале. Всё, что печатает psql, worker отправляет
-  в Redis, а нажатия клавиш из Redis передаёт psql. Входящих подключений worker не принимает:
-  он сам подключается к Redis и PostgreSQL, поэтому его можно держать рядом с базой,
-  не открывая наружу ни одного порта.
-- **Redis Streams** — очереди сообщений, через которые идут ввод, вывод и заявки на новые
-  сессии. В Redis же хранятся сведения о сессиях ([`streams.py`](webpsql/streams.py)).
+- **gateway** ([`webpsql/gateway.py`](webpsql/gateway.py)) — a FastAPI web server. Serves the
+  pages and holds the WebSocket connection with the browser. Checks everything the browser sends
+  and passes it on through Redis. It never starts psql itself.
+- **worker** ([`webpsql/worker.py`](webpsql/worker.py)) — creates the database copy
+  ([`sandbox.py`](webpsql/sandbox.py)) and starts psql in a pseudo-terminal, so the program
+  believes it runs in a real terminal window. Everything psql prints goes to Redis, and key
+  presses from Redis go to psql. The worker accepts no incoming connections: it connects to
+  Redis and PostgreSQL itself, so it can sit next to the database without opening a single port.
+- **Redis Streams** — message queues that carry input, output and requests for new sessions.
+  Redis also keeps the session details ([`streams.py`](webpsql/streams.py)).
 
-Подробно — как живёт сессия от открытия вкладки до закрытия, какие ключи лежат в Redis,
-формат сообщений и настройки: [docs/architecture.md](docs/architecture.md).
+In detail — how a session lives from opening the tab to closing it, which keys are in Redis,
+the message format and the settings: [docs/architecture.md](docs/architecture.md).
 
-![Страница «Сессии»: где работает psql и за сколько создалась копия базы](assets/sessions.png)
+![The Sessions page: where psql runs and how long the database copy took](assets/sessions.png)
 
-## Учебная база
+## Demo database
 
-Книжный магазин `bookstore`: 15 авторов, 30 книг, 500 покупателей, 5 000 заказов, около
-10 000 позиций в заказах и представление `top_authors`. Данные генерируются одинаково
-при каждом запуске.
+A `bookstore`: 15 authors, 30 books, 500 customers, 5,000 orders, about 10,000 order lines
+and a `top_authors` view. The data is generated the same way on every start.
 
 ```mermaid
 erDiagram
-    authors ||--o{ books : "пишет"
-    customers ||--o{ orders : "оформляет"
-    orders ||--|{ order_items : "состоит из"
-    books ||--o{ order_items : "входит в"
+    authors ||--o{ books : "writes"
+    customers ||--o{ orders : "places"
+    orders ||--|{ order_items : "consists of"
+    books ||--o{ order_items : "appears in"
 ```
 
-Столбцы, индексы и что попробовать — [docs/data-model.md](docs/data-model.md).
+Columns, indexes and things to try: [docs/data-model.md](docs/data-model.md).
 
-## Что ограничивает масштаб
+## What limits scale
 
-Раньше всего закончатся подключения к PostgreSQL. Каждая сессия — это отдельное подключение,
-а PostgreSQL по умолчанию принимает не больше 100 подключений. Память и Redis закончатся
-гораздо позже.
+PostgreSQL connections run out first. Every session is a separate connection, and by default
+PostgreSQL accepts at most 100. Memory and Redis run out much later.
 
-Ещё два слабых места:
+Two more weak spots:
 
-- когда много людей открывают терминал одновременно, копии баз создаются по очереди —
-  при 10 одновременных сессиях ожидание вырастает с 50 до ~200 мс;
-- если запрос выводит огромный результат, а браузер не успевает его принимать, часть вывода
-  может потеряться: сервер не притормаживает psql, а хранит только последние 2 000 кусков вывода.
+- when many people open a terminal at once, database copies are created in turn — with 10
+  sessions opening together the wait grows from 50 to ~200 ms;
+- if a query prints a huge result and the browser cannot keep up, part of the output can be
+  lost: the server does not slow psql down, it only keeps the last 2,000 pieces of output.
 
-Замеры и как это можно исправить — [docs/bottlenecks.md](docs/bottlenecks.md).
+Measurements and how to fix these: [docs/bottlenecks.md](docs/bottlenecks.md).
 
-## Тесты
+## Tests
 
 ```bash
 pip install -r requirements-dev.txt
-ruff check .                     # линтер, правила в pyproject.toml
-python -m pytest tests/unit      # быстрые тесты, Docker не нужен
+ruff check .                     # linter, rules in pyproject.toml
+python -m pytest tests/unit      # fast tests, no Docker needed
 docker compose up --build --detach --wait
-python -m pytest tests/stand     # тесты на запущенном стенде
+python -m pytest tests/stand     # tests against the running stack
 ```
 
-**Быстрые тесты** (около секунды) проверяют сервер без Docker: Redis заменён на
-fakeredis. Покрыто: какие сообщения WebSocket пропускаются и какие отсеиваются, HTTP API,
-заявка на новую сессию, переподключение с получением только пропущенного вывода,
-защита от подстановки лишнего в имена баз.
+**Fast tests** (about a second) check the server without Docker: Redis is replaced with
+fakeredis. They cover which WebSocket messages get through and which are rejected, the HTTP
+API, filing a request for a new session, reconnecting and getting only the missed output,
+and protection against injecting anything into database names.
 
-**Тесты на стенде** подключаются к настоящему терминалу через WebSocket — как вкладка
-браузера — и проверяют то, ради чего проект сделан:
+**Stack tests** connect to a real terminal over WebSocket — the way a browser tab does — and
+check what the project is for:
 
-- у сессии своя копия базы, и запрос в ней выполняется;
-- удалённая таблица не пропадает у следующей сессии;
-- после закрытия сессия помечается завершённой;
-- `\c postgres`, удаление шаблона, `COPY … PROGRAM`, `ALTER SYSTEM`, `CREATE DATABASE` запрещены;
-- `\!` работает от пользователя `sandbox`, паролей в окружении нет;
-- после обрыва связи приходит только пропущенный вывод;
-- неправильное сообщение отклоняется, а сессия продолжает работать.
+- a session gets its own database copy and a query runs in it;
+- a dropped table is still there for the next session;
+- after closing, the session is marked as finished;
+- `\c postgres`, dropping the template, `COPY … PROGRAM`, `ALTER SYSTEM`, `CREATE DATABASE` are forbidden;
+- `\!` runs as the `sandbox` user, with no passwords in the environment;
+- after a dropped connection only the missed output arrives;
+- an invalid message is rejected and the session keeps working.
 
-Если стенд не запущен, эти тесты пропускаются.
+If the stack is not running, these tests are skipped.
 
-Оба набора запускаются на каждый push и pull request в GitHub Actions
-([`.github/workflows/tests.yml`](.github/workflows/tests.yml)). Сначала линтер и быстрые
-тесты, затем, если они прошли, весь стенд поднимается в `docker compose` и проверяется
-тестами на стенде. В CI пропуск запрещён: если стенд не поднялся, прогон падает и выводит
-логи контейнеров.
+Both sets run on every push and pull request in GitHub Actions
+([`.github/workflows/tests.yml`](.github/workflows/tests.yml)). First the linter and the fast
+tests; if they pass, the whole stack starts in `docker compose` and the stack tests run against
+it. In CI skipping is not allowed: if the stack did not start, the run fails and prints the
+container logs.
 
-## Что где лежит
+## Project layout
 
 ```
 webpsql/
-  gateway.py     веб-сервер: страницы, WebSocket /ws, /api/sessions
-  worker.py      запуск psql в псевдотерминале, обмен через Redis, уборка забытых копий
-  sandbox.py     создание и удаление копии базы и пользователя для сессии
-  protocol.py    формат сообщений WebSocket и ответов API
-  streams.py     имена ключей Redis, типы сообщений, статусы сессий
-  config.py      настройки из переменных окружения
-  psqlrc         настройки psql: приглашение bookstore=> вместо служебного имени копии
-  static/        страницы «Терминал» и «Сессии»
+  gateway.py     web server: pages, WebSocket /ws, /api/sessions
+  worker.py      psql in a pseudo-terminal, exchange through Redis, cleanup of forgotten copies
+  sandbox.py     creating and dropping the database copy and user for a session
+  protocol.py    WebSocket message and API response formats
+  streams.py     Redis key names, message types, session statuses
+  config.py      settings from environment variables
+  psqlrc         psql settings: the bookstore=> prompt instead of the copy's internal name
+  static/        the Terminal and Sessions pages
 db/
-  init/          подготовка шаблона базы (выполняется при первом запуске PostgreSQL)
-  sql/           таблицы и данные учебной базы
+  init/          template preparation (runs on the first PostgreSQL start)
+  sql/           demo database tables and data
 tests/
-  unit/          быстрые тесты без Docker
-  stand/         тесты на запущенном стенде
+  unit/          fast tests without Docker
+  stand/         tests against the running stack
 scripts/
-  screenshots.py скриншоты для README
-docs/            устройство, песочница, учебная база, ограничения масштаба
+  screenshots.py README screenshots
+docs/            architecture, sandbox, demo database, scaling limits
 ```
 
-## Ограничения
+## Limitations
 
-Проект рассчитан на запуск у себя. Входа по паролю нет. Команда `\!` в psql открывает
-командную строку внутри контейнера — от пользователя без прав и без паролей в окружении,
-но с доступом к внутренней сети стенда. Что нужно сделать, прежде чем открывать доступ другим
-людям, — в конце [docs/sandbox.md](docs/sandbox.md). Библиотека терминала xterm.js
-загружается с CDN jsDelivr, поэтому странице нужен интернет.
+The project is meant to be run on your own machine. There is no login. The `\!` command in
+psql opens a shell inside a container — as a user with no privileges and no passwords in its
+environment, but with access to the stack's internal network. What to do before letting other
+people in is at the end of [docs/sandbox.md](docs/sandbox.md). The xterm.js terminal library
+is loaded from the jsDelivr CDN, so the page needs internet access.
 
-## Лицензия
+## License
 
 [MIT](LICENSE)

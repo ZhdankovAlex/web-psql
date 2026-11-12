@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Терминал · web-psql</title>
+<title>Terminal · web-psql</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐘</text></svg>">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm@5.5.0/css/xterm.css">
 <link rel="stylesheet" href="/static/app.css">
@@ -15,14 +15,14 @@
     <span class="brand-ic" aria-hidden="true">🐘</span><span class="nav-label">web-psql</span>
   </a>
   <nav>
-    <a href="/" class="on" title="Терминал"><span class="nav-ic" aria-hidden="true">⌨️</span><span class="nav-label">Терминал</span></a>
-    <a href="/sessions" title="Сессии"><span class="nav-ic" aria-hidden="true">🗂️</span><span class="nav-label">Сессии</span></a>
+    <a href="/" class="on" title="Terminal"><span class="nav-ic" aria-hidden="true">⌨️</span><span class="nav-label">Terminal</span></a>
+    <a href="/sessions" title="Sessions"><span class="nav-ic" aria-hidden="true">🗂️</span><span class="nav-label">Sessions</span></a>
   </nav>
   <div class="sidenav-foot">
-    <div class="status-pill busy" id="st-conn" title="Соединение с сервером"><i class="dot-st"></i><span class="nav-label" id="st-conn-text">подключение…</span></div>
-    <div class="status-pill" id="st-db" title="Своя копия учебной базы"><i class="dot-st"></i><span class="nav-label" id="st-db-text">копия базы…</span></div>
-    <button class="nav-toggle" id="nav-toggle" type="button" title="Свернуть / развернуть панель" aria-label="Свернуть / развернуть панель">
-      <span class="nav-ic" aria-hidden="true">«</span><span class="nav-label">Свернуть</span>
+    <div class="status-pill busy" id="st-conn" title="Connection to the server"><i class="dot-st"></i><span class="nav-label" id="st-conn-text">connecting…</span></div>
+    <div class="status-pill" id="st-db" title="Your own copy of the demo database"><i class="dot-st"></i><span class="nav-label" id="st-db-text">database copy…</span></div>
+    <button class="nav-toggle" id="nav-toggle" type="button" title="Collapse / expand the panel" aria-label="Collapse / expand the panel">
+      <span class="nav-ic" aria-hidden="true">«</span><span class="nav-label">Collapse</span>
     </button>
   </div>
 </aside>
@@ -30,20 +30,20 @@
   <section class="card hero">
     <div class="hero-head">
       <div>
-        <div class="eyebrow">Песочница PostgreSQL</div>
-        <h1>Терминал</h1>
+        <div class="eyebrow">PostgreSQL sandbox</div>
+        <h1>Terminal</h1>
         <p class="muted">
-          Настоящий <code>psql</code> со своей копией учебной базы <code>bookstore</code>. Удаляйте таблицы,
-          меняйте данные — «Начать заново» вернёт всё как было.
+          A real <code>psql</code> with your own copy of the <code>bookstore</code> demo database.
+          Drop tables, change data — “Start over” brings everything back.
         </p>
       </div>
       <div class="actions">
-        <button class="primary" id="restart" type="button" title="Закрыть psql и получить чистую копию базы">Начать заново</button>
-        <button id="reconnect" type="button" title="Переподключиться к той же сессии">Переподключиться</button>
+        <button class="primary" id="restart" type="button" title="Close psql and get a clean copy of the database">Start over</button>
+        <button id="reconnect" type="button" title="Reconnect to the same session">Reconnect</button>
       </div>
     </div>
     <div class="examples">
-      <span class="muted small">Например:</span>
+      <span class="muted small">Try:</span>
       <button class="chip" type="button" data-sql="\dt+">\dt+</button>
       <button class="chip" type="button" data-sql="\d books">\d books</button>
       <button class="chip" type="button" data-sql="select * from top_authors;">select * from top_authors;</button>
@@ -57,7 +57,7 @@
       <span class="dots" aria-hidden="true"><i></i><i></i><i></i></span>
       <span id="term-title">psql — bookstore</span>
       <span class="spacer"></span>
-      <span>Копировать <kbd>Ctrl+Shift+C</kbd> · вставить <kbd>Ctrl+Shift+V</kbd></span>
+      <span>Copy <kbd>Ctrl+Shift+C</kbd> · paste <kbd>Ctrl+Shift+V</kbd></span>
     </div>
     <div id="terminal"></div>
   </section>

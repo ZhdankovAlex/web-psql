@@ -1,16 +1,15 @@
-"""Worker: держит псевдотерминалы с psql и связывает их с Redis Streams.
+"""Worker: runs psql in pseudo-terminals and connects them to Redis Streams.
 
-Запуск: ``python -m webpsql.worker``.
+Run: ``python -m webpsql.worker``.
 
-Worker читает заявки на открытие сессий из ``term:control`` в составе группы читателей
-Redis (consumer group): worker'ов можно запустить несколько, и каждая заявка достанется
-ровно одному из них.
-Дальше сессия живёт на этом worker'е: ввод он читает из ``term:{sid}:in``,
-вывод терминала пишет в ``term:{sid}:out``.
+The worker reads requests for new sessions from ``term:control`` as a member of a Redis
+consumer group: you can run several workers, and each request goes to exactly one of them.
+From then on the session lives on that worker: it reads input from ``term:{sid}:in``
+and writes terminal output to ``term:{sid}:out``.
 
-Для каждой сессии worker создаёт отдельную копию учебной базы и отдельную роль
-(:mod:`webpsql.sandbox`), а psql запускает от имени непривилегированного пользователя ОС
-с чистым окружением — так через ``\\!`` в psql не добраться до паролей worker'а.
+For each session the worker creates a separate copy of the demo database and a separate
+database user (:mod:`webpsql.sandbox`), and runs psql as an unprivileged OS user with a
+clean environment — so ``\\!`` in psql cannot reach the worker's passwords.
 """
 
 from __future__ import annotations
@@ -54,26 +53,26 @@ from webpsql.streams import (
 log = logging.getLogger("webpsql.worker")
 
 READ_CHUNK = 64 * 1024
-"""Сколько байт читать из pty за один раз."""
+"""How many bytes to read from the pty at once."""
 
 OUTPUT_TTL = 300
-"""Сколько секунд хранить потоки сессии после её завершения."""
+"""How many seconds to keep the session streams after the session ends."""
 
 PSQLRC = Path(__file__).with_name("psqlrc")
-"""Настройки psql в песочнице: приглашение ``bookstore=>`` вместо имени копии базы."""
+"""psql settings for the sandbox: the ``bookstore=>`` prompt instead of the copy's real name."""
 
 CLEANUP_INTERVAL = 60
-"""Как часто (в секундах) искать копии баз, оставшиеся от упавших worker'ов."""
+"""How often (in seconds) to look for database copies left behind by crashed workers."""
 
 
 def _clamp(value: str | int | None, default: int, low: int = 2, high: int = 1000) -> int:
-    """Привести размер окна к разумному целому.
+    """Turn a window size into a sensible integer.
 
-    :param value: значение из сообщения (строка или число).
-    :param default: значение, если ``value`` пустое или не число.
-    :param low: нижняя граница.
-    :param high: верхняя граница.
-    :return: число в диапазоне ``[low, high]``.
+    :param value: value from the message (string or number).
+    :param default: used when ``value`` is empty or not a number.
+    :param low: lower bound.
+    :param high: upper bound.
+    :return: a number in ``[low, high]``.
     """
     try:
         return max(low, min(high, int(value)))  # type: ignore[arg-type]
@@ -82,32 +81,32 @@ def _clamp(value: str | int | None, default: int, low: int = 2, high: int = 1000
 
 
 def _now() -> str:
-    """Текущее время в ISO 8601 (UTC) для ``term:{sid}:meta``."""
+    """Current time in ISO 8601 (UTC) for ``term:{sid}:meta``."""
     return datetime.now(UTC).isoformat()
 
 
 class Terminal:
-    """Один psql в одном псевдотерминале, подключённый к своей копии базы.
+    """One psql in one pseudo-terminal, connected to its own copy of the database.
 
-    Вывод читается без ожидания: ``loop.add_reader`` вызывает чтение, только когда в pty
-    появились данные. Прочитанное кладётся в очередь, а отдельная задача забирает из неё всё
-    накопившееся и отправляет одним ``XADD`` — так при большом выводе (например, длинный
-    ``SELECT``) в Redis уходит меньше сообщений.
+    Output is read without waiting: ``loop.add_reader`` triggers a read only when the pty
+    has data. What was read goes into a queue, and a separate task takes everything that
+    has piled up and sends it with one ``XADD`` — so a large output (say, a long ``SELECT``)
+    produces fewer Redis messages.
     """
 
     def __init__(
         self, sid: str, redis: aioredis.Redis, cfg: Settings, sandboxes: SandboxManager,
         worker: str, cols: int, rows: int,
     ) -> None:
-        """Подготовить сессию; копия базы и процесс создаются в :meth:`run`.
+        """Prepare the session; the database copy and the process are created in :meth:`run`.
 
-        :param sid: идентификатор сессии.
-        :param redis: клиент Redis.
-        :param cfg: настройки.
-        :param sandboxes: кто создаёт и удаляет копии базы.
-        :param worker: имя worker'а — записывается в сведения о сессии.
-        :param cols: ширина терминала в символах.
-        :param rows: высота терминала в строках.
+        :param sid: session id.
+        :param redis: Redis client.
+        :param cfg: settings.
+        :param sandboxes: creates and drops database copies.
+        :param worker: worker name — stored in the session details.
+        :param cols: terminal width in characters.
+        :param rows: terminal height in lines.
         """
         self.sid = sid
         self.redis = redis
@@ -121,21 +120,21 @@ class Terminal:
         self._chunks: asyncio.Queue[str | None] = asyncio.Queue()
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
-    # --- процесс и pty -------------------------------------------------------
+    # --- process and pty -----------------------------------------------------
 
     def _spawn(self, sandbox: Sandbox) -> None:
-        """Создать pty и запустить в нём psql, подключённый к копии базы.
+        """Create a pty and start psql in it, connected to the database copy.
 
-        Дочерний процесс получает slave-сторону pty как stdin/stdout/stderr,
-        начинает новый сеанс ОС (``setsid``) и делает этот pty своим
-        управляющим терминалом — тогда Ctrl+C из браузера доходит до psql как SIGINT.
+        The child gets the slave side of the pty as stdin/stdout/stderr, starts a new
+        OS session (``setsid``) and makes this pty its controlling terminal — that is how
+        Ctrl+C from the browser reaches psql as SIGINT.
 
-        Окружение psql собирается с нуля: в нём только данные роли сессии, а не
-        переменные worker'а (пароль суперпользователя, адрес Redis). Если задан
-        ``SANDBOX_USER``, psql работает от его имени и не может прочитать
-        ``/proc/<pid>/environ`` worker'а.
+        The psql environment is built from scratch: it holds only the session's own
+        connection details, none of the worker's variables (superuser password, Redis
+        address). If ``SANDBOX_USER`` is set, psql runs as that user and cannot read the
+        worker's ``/proc/<pid>/environ``.
 
-        :param sandbox: куда подключаться.
+        :param sandbox: where to connect.
         """
         master, slave = pty.openpty()
         self.master_fd = master
@@ -143,7 +142,7 @@ class Terminal:
 
         user = pwd.getpwnam(self.cfg.sandbox_user) if self.cfg.sandbox_user else None
         if user is not None:
-            # less и другие программы открывают /dev/tty — терминал должен принадлежать пользователю
+            # less and other programs open /dev/tty — the terminal must belong to the user
             os.fchown(slave, user.pw_uid, user.pw_gid)
         nproc = self.cfg.sandbox_nproc
 
@@ -159,8 +158,8 @@ class Terminal:
             "TERM": "xterm-256color",
             "LANG": "C.UTF-8",
             "PAGER": "less",
-            "LESS": "-SRXF",  # длинные строки прокручиваются вбок, короткий вывод — без пейджера
-            "PSQL_HISTORY": "/dev/null",  # файл истории был бы общим на всех — не сохраняем
+            "LESS": "-SRXF",  # long lines scroll sideways, short output skips the pager
+            "PSQL_HISTORY": "/dev/null",  # the history file would be shared by everyone — do not keep it
             "PSQLRC": str(PSQLRC),
             "PGHOST": self.cfg.pg_host,
             "PGPORT": str(self.cfg.pg_port),
@@ -169,7 +168,7 @@ class Terminal:
             "PGPASSWORD": sandbox.password,
             "PGAPPNAME": "web-psql",
         }
-        self.proc = subprocess.Popen(  # noqa: S603 — команда из конфигурации, не от пользователя
+        self.proc = subprocess.Popen(  # noqa: S603 — the command comes from settings, not from the user
             self.cfg.psql_args,
             stdin=slave,
             stdout=slave,
@@ -180,26 +179,26 @@ class Terminal:
             user=user.pw_uid if user else None,
             group=user.pw_gid if user else None,
             extra_groups=[] if user else None,
-            preexec_fn=child_setup,  # noqa: PLW1509 — в worker'е нет потоков
+            preexec_fn=child_setup,  # noqa: PLW1509 — the worker has no threads
             close_fds=True,
         )
         os.close(slave)
         os.set_blocking(master, False)
 
     def _set_winsize(self) -> None:
-        """Сообщить pty новый размер окна; ядро пришлёт psql сигнал SIGWINCH."""
+        """Tell the pty the new window size; the kernel sends psql SIGWINCH."""
         if self.master_fd < 0:
             return
         packed = struct.pack("HHHH", self.rows, self.cols, 0, 0)
         fcntl.ioctl(self.master_fd, termios.TIOCSWINSZ, packed)
 
     def _on_readable(self) -> None:
-        """Вызывается, когда в pty появились данные (или он закрылся)."""
+        """Called when the pty has data (or was closed)."""
         try:
             data = os.read(self.master_fd, READ_CHUNK)
         except BlockingIOError:
             return
-        except OSError:  # EIO — процесс завершился и закрыл slave
+        except OSError:  # EIO — the process exited and closed the slave side
             data = b""
         if not data:
             asyncio.get_running_loop().remove_reader(self.master_fd)
@@ -209,10 +208,10 @@ class Terminal:
         if text:
             self._chunks.put_nowait(text)
 
-    # --- задачи сессии -------------------------------------------------------
+    # --- session tasks -------------------------------------------------------
 
     async def _pump_output(self) -> None:
-        """Отправлять вывод pty в поток ``term:{sid}:out``, объединяя накопившееся в одно сообщение."""
+        """Send pty output to the ``term:{sid}:out`` stream, merging whatever piled up into one message."""
         out = output_stream(self.sid)
         while True:
             first = await self._chunks.get()
@@ -235,9 +234,9 @@ class Terminal:
                 return
 
     async def _consume_input(self) -> None:
-        """Читать ``term:{sid}:in`` и передавать нажатия клавиш и размер окна в pty."""
+        """Read ``term:{sid}:in`` and pass key presses and window size to the pty."""
         stream = input_stream(self.sid)
-        last_id = "0-0"  # поток создаётся под сессию — читаем с самого начала
+        last_id = "0-0"  # the stream is created for this session — read from the very beginning
         while True:
             batches = await self.redis.xread({stream: last_id}, block=5000, count=100)
             for _, messages in batches:
@@ -252,65 +251,65 @@ class Terminal:
                         self._set_winsize()
                         await self.redis.hset(meta_key(self.sid), mapping={"cols": self.cols, "rows": self.rows})
                     elif kind == Kind.CLOSE:
-                        log.info("session %s: закрыта клиентом", self.sid)
+                        log.info("session %s: closed by the client", self.sid)
                         return
 
     async def _write(self, text: str) -> None:
-        """Записать ввод пользователя в pty.
+        """Write user input to the pty.
 
-        :param text: символы из xterm.js (включая управляющие, например ``\\x03`` для Ctrl+C).
+        :param text: characters from xterm.js (including control ones, e.g. ``\\x03`` for Ctrl+C).
         """
         data = text.encode()
         while data:
             try:
                 written = os.write(self.master_fd, data)
-            except BlockingIOError:  # буфер pty полон (например, вставили много текста)
+            except BlockingIOError:  # the pty buffer is full (e.g. a lot of text was pasted)
                 await asyncio.sleep(0.01)
                 continue
             except OSError:
                 return
             data = data[written:]
 
-    async def _hold_lease(self) -> None:
-        """Обновлять отметку «worker жив», пока сессия работает.
+    async def _keep_alive_mark(self) -> None:
+        """Keep the "worker is alive" mark fresh while the session runs.
 
-        Если worker упадёт, отметка исчезнет через :data:`OWNER_TTL` секунд: gateway закроет
-        сессию в браузере, а другой worker при уборке удалит её копию базы.
+        If the worker crashes, the mark disappears after :data:`OWNER_TTL` seconds: the gateway
+        ends the session in the browser, and another worker's cleanup drops the database copy.
         """
         while True:
             await self.redis.set(owner_key(self.sid), self.worker, ex=OWNER_TTL)
             await asyncio.sleep(OWNER_RENEW)
 
-    async def _watch_heartbeat(self) -> None:
-        """Завершить сессию, если пропала отметка «вкладка открыта» (вкладку закрыли)."""
+    async def _watch_tab(self) -> None:
+        """End the session when the "tab is open" mark disappears (the tab was closed)."""
         while True:
             await asyncio.sleep(5)
             if not await self.redis.exists(alive_key(self.sid)):
-                log.info("session %s: вкладка закрыта, завершаю", self.sid)
+                log.info("session %s: the tab is closed, ending", self.sid)
                 return
 
-    # --- жизненный цикл ------------------------------------------------------
+    # --- lifecycle -----------------------------------------------------------
 
     async def run(self) -> None:
-        """Создать копию базы, запустить psql и обслуживать сессию до её завершения."""
+        """Create the database copy, start psql and serve the session until it ends."""
         loop = asyncio.get_running_loop()
-        # отметку ставим до создания базы, иначе уборка сочтёт новую копию забытой и удалит
-        lease = asyncio.create_task(self._hold_lease())
+        # set the mark before creating the database, otherwise cleanup would treat the new copy as forgotten
+        alive_mark = asyncio.create_task(self._keep_alive_mark())
         try:
             sandbox = await self.sandboxes.create(self.sid)
             self._spawn(sandbox)
-        except Exception as exc:  # noqa: BLE001 — любую ошибку показываем пользователю
-            log.exception("session %s: не удалось запустить", self.sid)
-            await self._emit_error(f"не удалось открыть сессию: {exc}")
+        except Exception as exc:  # noqa: BLE001 — show any error to the user
+            log.exception("session %s: failed to start", self.sid)
+            await self._emit_error(f"could not open the session: {exc}")
             await self._emit_exit(-1)
-            lease.cancel()
+            alive_mark.cancel()
             await self._cleanup()
             return
 
         await self.redis.xadd(output_stream(self.sid), {
             "kind": Kind.OUTPUT,
-            "data": f"\x1b[90mСвоя копия базы bookstore готова за {sandbox.created_ms} мс. "
-                    f"Меняйте и удаляйте что угодно: «Начать заново» вернёт исходные данные.\x1b[0m\r\n\r\n",
+            "data": f"\x1b[90mYour own copy of the bookstore database is ready in {sandbox.created_ms} ms. "
+                    f"Change or drop anything: “Start over” brings the original data back.\x1b[0m\r\n\r\n",
         })
         await self.redis.hset(meta_key(self.sid), mapping={
             "status": SessionStatus.RUNNING, "worker": self.worker,
@@ -321,26 +320,27 @@ class Terminal:
         pump = asyncio.create_task(self._pump_output())
         stoppers = [
             asyncio.create_task(self._consume_input()),
-            asyncio.create_task(self._watch_heartbeat()),
+            asyncio.create_task(self._watch_tab()),
         ]
-        log.info("session %s: psql pid=%s, база %s", self.sid, self.proc.pid if self.proc else "?", sandbox.database)
+        log.info("session %s: psql pid=%s, database %s", self.sid, self.proc.pid if self.proc else "?",
+                 sandbox.database)
         await asyncio.wait([pump, *stoppers], return_when=asyncio.FIRST_COMPLETED)
 
         for task in stoppers:
             task.cancel()
         code = await self._terminate()
-        # psql завершён — отправляем остаток вывода, а потом сообщаем о выходе
+        # psql has exited — send the rest of the output first, then report the exit
         with contextlib.suppress(asyncio.TimeoutError):
             await asyncio.wait_for(pump, timeout=2)
         pump.cancel()
         await self._emit_exit(code)
-        lease.cancel()
+        alive_mark.cancel()
         await self._cleanup()
 
     async def _terminate(self) -> int:
-        """Остановить psql: SIGHUP группе процессов, затем SIGKILL, если не помогло.
+        """Stop psql: SIGHUP to the process group, then SIGKILL if that did not help.
 
-        :return: код выхода процесса (отрицательный — номер сигнала).
+        :return: the process exit code (negative means the signal number).
         """
         proc = self.proc
         if proc is None:
@@ -358,9 +358,9 @@ class Terminal:
         return await asyncio.to_thread(proc.wait)
 
     async def _emit_exit(self, code: int) -> None:
-        """Сообщить gateway, что терминал завершился.
+        """Tell the gateway that the terminal has ended.
 
-        :param code: код выхода psql.
+        :param code: psql exit code.
         """
         await self.redis.xadd(output_stream(self.sid), {"kind": Kind.EXIT, "code": str(code)})
         await self.redis.hset(meta_key(self.sid), mapping={
@@ -368,14 +368,14 @@ class Terminal:
         })
 
     async def _emit_error(self, message: str) -> None:
-        """Отправить gateway текст ошибки.
+        """Send an error text to the gateway.
 
-        :param message: человекочитаемое описание.
+        :param message: human-readable description.
         """
         await self.redis.xadd(output_stream(self.sid), {"kind": Kind.ERROR, "message": message})
 
     async def _cleanup(self) -> None:
-        """Закрыть pty, удалить копию базы, потоки сессии оставить ещё на :data:`OUTPUT_TTL` секунд."""
+        """Close the pty, drop the database copy, keep the session streams for :data:`OUTPUT_TTL` more seconds."""
         if self.master_fd >= 0:
             with contextlib.suppress(Exception):
                 asyncio.get_running_loop().remove_reader(self.master_fd)
@@ -383,30 +383,30 @@ class Terminal:
                 os.close(self.master_fd)
         try:
             await self.sandboxes.drop(self.sid)
-        except Exception:  # noqa: BLE001 — копию удалит фоновая уборка
-            log.exception("session %s: не удалось удалить песочницу", self.sid)
+        except Exception:  # noqa: BLE001 — the background cleanup will drop the copy
+            log.exception("session %s: could not drop the database copy", self.sid)
         await self.redis.delete(input_stream(self.sid), alive_key(self.sid), owner_key(self.sid))
         await self.redis.expire(output_stream(self.sid), OUTPUT_TTL)
         await self.redis.expire(meta_key(self.sid), OUTPUT_TTL)
 
 
 class Worker:
-    """Принимает заявки на новые сессии и запускает :class:`Terminal`."""
+    """Takes requests for new sessions and starts a :class:`Terminal` for each."""
 
     def __init__(self, cfg: Settings) -> None:
-        """Создать worker.
+        """Create the worker.
 
-        :param cfg: настройки.
+        :param cfg: settings.
         """
         self.cfg = cfg
-        # socket_timeout=None: XREAD BLOCK держит соединение дольше любого разумного таймаута
+        # socket_timeout=None: XREAD BLOCK keeps the connection waiting longer than any sane timeout
         self.redis = aioredis.from_url(cfg.redis_url, decode_responses=True, socket_timeout=None)
         self.name = f"{socket.gethostname()}-{os.getpid()}"
         self.sessions: dict[str, asyncio.Task[None]] = {}
         self.sandboxes = SandboxManager(cfg.admin_dsn)
 
     async def _ensure_group(self) -> None:
-        """Создать группу читателей для ``term:control``, если её ещё нет."""
+        """Create the consumer group for ``term:control`` if it does not exist yet."""
         try:
             await self.redis.xgroup_create(CONTROL_STREAM, WORKERS_GROUP, id="0", mkstream=True)
         except ResponseError as exc:
@@ -414,15 +414,15 @@ class Worker:
                 raise
 
     async def _open(self, sid: str, cols: int, rows: int) -> None:
-        """Открыть сессию или отказать, если достигнут лимит.
+        """Open a session, or refuse if the limit is reached.
 
-        :param sid: идентификатор сессии.
-        :param cols: ширина терминала.
-        :param rows: высота терминала.
+        :param sid: session id.
+        :param cols: terminal width.
+        :param rows: terminal height.
         """
         if len(self.sessions) >= self.cfg.max_sessions:
             out = output_stream(sid)
-            await self.redis.xadd(out, {"kind": Kind.ERROR, "message": "слишком много открытых терминалов"})
+            await self.redis.xadd(out, {"kind": Kind.ERROR, "message": "too many open terminals, try again later"})
             await self.redis.xadd(out, {"kind": Kind.EXIT, "code": "-1"})
             await self.redis.hset(meta_key(sid), mapping={
                 "status": SessionStatus.REJECTED, "worker": self.name, "finished_at": _now(),
@@ -436,28 +436,28 @@ class Worker:
         task.add_done_callback(lambda _t, s=sid: self.sessions.pop(s, None))
 
     async def _cleanup_forgotten(self) -> None:
-        """Фоновая уборка: удалять копии баз, у которых не осталось работающей сессии.
+        """Background cleanup: drop database copies that no longer have a running session.
 
-        Обычно копию удаляет сам :class:`Terminal`, но если worker упал или его
-        перезапустили, базы и пользователи остаются. Копия считается забытой, если её
-        сессия не на этом worker'е и отметку «worker жив» для неё никто не обновляет.
+        Normally :class:`Terminal` drops its own copy, but if a worker crashed or was
+        restarted, databases and users are left behind. A copy counts as forgotten when its
+        session is not on this worker and nobody refreshes its "worker is alive" mark.
         """
         while True:
             try:
                 for sid in await self.sandboxes.list_sids():
                     if sid not in self.sessions and not await self.redis.exists(owner_key(sid)):
-                        log.info("уборка: удаляю забытую копию базы %s", sid)
+                        log.info("cleanup: dropping forgotten database copy %s", sid)
                         await self.sandboxes.drop(sid)
-            except Exception:  # noqa: BLE001 — ошибка уборки не должна ронять worker
-                log.exception("уборка: ошибка")
+            except Exception:  # noqa: BLE001 — a cleanup error must not bring the worker down
+                log.exception("cleanup: error")
             await asyncio.sleep(CLEANUP_INTERVAL)
 
     async def run(self) -> None:
-        """Главный цикл: читать ``term:control`` и открывать сессии."""
+        """Main loop: read ``term:control`` and open sessions."""
         await self.sandboxes.start()
         cleanup_task = asyncio.create_task(self._cleanup_forgotten(), name="sandbox-cleanup")
         await self._ensure_group()
-        log.info("worker %s готов, лимит сессий: %d", self.name, self.cfg.max_sessions)
+        log.info("worker %s ready, session limit: %d", self.name, self.cfg.max_sessions)
         try:
             while True:
                 batches = await self.redis.xreadgroup(
@@ -478,7 +478,7 @@ class Worker:
 
 
 def main() -> None:
-    """Точка входа ``python -m webpsql.worker``."""
+    """Entry point for ``python -m webpsql.worker``."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     asyncio.run(Worker(settings).run())
 

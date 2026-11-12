@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="ru">
+<html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Сессии · web-psql</title>
+<title>Sessions · web-psql</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐘</text></svg>">
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/nav.js"></script>
@@ -14,34 +14,34 @@
     <span class="brand-ic" aria-hidden="true">🐘</span><span class="nav-label">web-psql</span>
   </a>
   <nav>
-    <a href="/" title="Терминал"><span class="nav-ic" aria-hidden="true">⌨️</span><span class="nav-label">Терминал</span></a>
-    <a href="/sessions" class="on" title="Сессии"><span class="nav-ic" aria-hidden="true">🗂️</span><span class="nav-label">Сессии</span></a>
+    <a href="/" title="Terminal"><span class="nav-ic" aria-hidden="true">⌨️</span><span class="nav-label">Terminal</span></a>
+    <a href="/sessions" class="on" title="Sessions"><span class="nav-ic" aria-hidden="true">🗂️</span><span class="nav-label">Sessions</span></a>
   </nav>
   <div class="sidenav-foot">
-    <div class="status-pill busy" id="st-count" title="Сколько psql сейчас запущено"><i class="dot-st"></i><span class="nav-label" id="st-count-text">загрузка…</span></div>
-    <button class="nav-toggle" id="nav-toggle" type="button" title="Свернуть / развернуть панель" aria-label="Свернуть / развернуть панель">
-      <span class="nav-ic" aria-hidden="true">«</span><span class="nav-label">Свернуть</span>
+    <div class="status-pill busy" id="st-count" title="How many psql processes are running"><i class="dot-st"></i><span class="nav-label" id="st-count-text">loading…</span></div>
+    <button class="nav-toggle" id="nav-toggle" type="button" title="Collapse / expand the panel" aria-label="Collapse / expand the panel">
+      <span class="nav-ic" aria-hidden="true">«</span><span class="nav-label">Collapse</span>
     </button>
   </div>
 </aside>
 <main><div class="page">
   <section class="card hero">
-    <div class="eyebrow">Состояние в Redis</div>
-    <h1>Сессии</h1>
+    <div class="eyebrow">State in Redis</div>
+    <h1>Sessions</h1>
     <p class="muted">
-      Каждая вкладка с терминалом — сессия: свой psql на одном из worker'ов и своя копия базы.
-      Таблица обновляется каждые 3 секунды; завершённые сессии видны ещё 5 минут.
-      Те же данные отдаёт <a href="/docs#/default/list_sessions_api_sessions_get"><code>GET /api/sessions</code></a>.
+      Every tab with a terminal is a session: its own psql on one of the workers and its own copy of the database.
+      The table refreshes every 3 seconds; finished sessions stay visible for 5 more minutes.
+      The same data is available from <a href="/docs#/default/list_sessions_api_sessions_get"><code>GET /api/sessions</code></a>.
     </p>
   </section>
 
   <section class="card">
     <table>
       <thead><tr>
-        <th>Сессия</th><th>Статус</th><th>Worker</th><th>Копия базы</th><th>Создана за</th>
-        <th>Вкладок</th><th>Окно</th><th>Открыта</th>
+        <th>Session</th><th>Status</th><th>Worker</th><th>Database copy</th><th>Created in</th>
+        <th>Tabs</th><th>Window</th><th>Opened</th>
       </tr></thead>
-      <tbody id="rows"><tr><td colspan="8" class="empty">загрузка…</td></tr></tbody>
+      <tbody id="rows"><tr><td colspan="8" class="empty">loading…</td></tr></tbody>
     </table>
   </section>
 </div></main>

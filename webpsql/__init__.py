@@ -1,7 +1,7 @@
-"""web-psql: интерактивный psql в браузере.
+"""web-psql: interactive psql in the browser.
 
-Пакет состоит из двух процессов, которые общаются только через Redis Streams:
+The package is two processes that talk to each other only through Redis Streams:
 
-* :mod:`webpsql.gateway` — веб-сервер: отдаёт страницу и держит WebSocket с браузером;
-* :mod:`webpsql.worker` — владелец псевдотерминалов (pty), в которых работает ``psql``.
+* :mod:`webpsql.gateway` — web server: serves the pages and holds the WebSocket with the browser;
+* :mod:`webpsql.worker` — runs psql in pseudo-terminals, one copy of the demo database per session.
 """

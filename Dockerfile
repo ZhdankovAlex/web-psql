@@ -1,5 +1,5 @@
-# Один образ для gateway и worker; worker'у нужен psql, поэтому ставим postgresql-client.
-# Debian trixie: в нём postgresql-client 17 — та же версия, что и у сервера.
+# One image for both the gateway and the worker; the worker needs psql, hence postgresql-client.
+# Debian trixie ships postgresql-client 17 — the same version as the server.
 FROM python:3.12-slim-trixie
 
 RUN apt-get update \
@@ -12,8 +12,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY webpsql ./webpsql
 
-# app     — от его имени работает gateway;
-# sandbox — от его имени worker запускает psql: у него нет доступа к окружению worker'а.
+# app     — runs the gateway;
+# sandbox — the worker starts psql as this user: it cannot see the worker's environment.
 RUN useradd --create-home --uid 1000 app \
  && useradd --create-home --uid 2000 --shell /bin/bash sandbox
 USER app

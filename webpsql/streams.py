@@ -1,15 +1,15 @@
-"""Имена ключей Redis и формат сообщений между gateway и worker.
+"""Redis key names and the message format between the gateway and the workers.
 
-Схема ключей::
+Keys::
 
-    term:control          gateway -> worker   заявки на сессию; каждую получает один worker (группа читателей "workers")
-    term:{sid}:in         gateway -> worker   ввод, размер окна, закрытие
-    term:{sid}:out        worker  -> gateway  вывод, ошибки, код выхода
-    term:{sid}:alive      gateway             отметка «вкладка открыта» (ключ с TTL)
-    term:{sid}:owner      worker              отметка «worker жив и держит psql» (ключ с TTL)
-    term:{sid}:meta       gateway и worker    сведения о сессии (hash), см. :class:`SessionStatus`
+    term:control          gateway -> worker   session requests; each goes to one worker (consumer group "workers")
+    term:{sid}:in         gateway -> worker   input, window size, close
+    term:{sid}:out        worker  -> gateway  output, errors, exit code
+    term:{sid}:alive      gateway             "tab is open" mark (key with a TTL)
+    term:{sid}:owner      worker              "worker is alive and runs psql" mark (key with a TTL)
+    term:{sid}:meta       gateway and worker  session details (hash), see :class:`SessionStatus`
 
-Redis хранит поля сообщений строками; тип сообщения лежит в поле ``kind`` (:class:`Kind`).
+Redis stores message fields as strings; the message type is in the ``kind`` field (:class:`Kind`).
 """
 
 from __future__ import annotations
@@ -21,89 +21,89 @@ WORKERS_GROUP = "workers"
 META_PATTERN = "term:*:meta"
 
 OWNER_TTL = 15
-"""Сколько секунд живёт отметка «worker жив»: если worker упал, через столько сессия считается потерянной."""
+"""How many seconds the "worker is alive" mark lives: if the worker crashes, the session is lost after this."""
 
 OWNER_RENEW = 5
-"""Как часто worker обновляет отметку «worker жив»."""
+"""How often the worker refreshes the "worker is alive" mark."""
 
 META_TTL = 24 * 3600
-"""Страховочный TTL сведений о сессии: если worker упадёт, ключ всё равно исчезнет."""
+"""Safety TTL for session details: even if the worker crashes, the key goes away eventually."""
 
 
 class Kind(StrEnum):
-    """Тип сообщения в потоках Redis (поле ``kind``)."""
+    """Message type in the Redis streams (the ``kind`` field)."""
 
     OPEN = "open"
-    """``term:control``: открыть сессию (поля ``sid``, ``cols``, ``rows``)."""
+    """``term:control``: open a session (fields ``sid``, ``cols``, ``rows``)."""
     INPUT = "input"
-    """``term:{sid}:in``: нажатия клавиш (``data``)."""
+    """``term:{sid}:in``: key presses (``data``)."""
     RESIZE = "resize"
-    """``term:{sid}:in``: новый размер окна (``cols``, ``rows``)."""
+    """``term:{sid}:in``: new window size (``cols``, ``rows``)."""
     CLOSE = "close"
-    """``term:{sid}:in``: завершить psql."""
+    """``term:{sid}:in``: stop psql."""
     OUTPUT = "output"
-    """``term:{sid}:out``: вывод терминала (``data``)."""
+    """``term:{sid}:out``: terminal output (``data``)."""
     ERROR = "error"
-    """``term:{sid}:out``: ошибка (``message``)."""
+    """``term:{sid}:out``: an error (``message``)."""
     EXIT = "exit"
-    """``term:{sid}:out``: psql завершился (``code``)."""
+    """``term:{sid}:out``: psql has exited (``code``)."""
 
 
 class SessionStatus(StrEnum):
-    """Состояние сессии в ``term:{sid}:meta``."""
+    """Session state in ``term:{sid}:meta``."""
 
     PENDING = "pending"
-    """Gateway отправил заявку, worker её ещё не взял."""
+    """The gateway sent a request, no worker has picked it up yet."""
     RUNNING = "running"
-    """psql запущен."""
+    """psql is running."""
     REJECTED = "rejected"
-    """Worker отказал: достигнут лимит терминалов."""
+    """The worker refused: the terminal limit is reached."""
     EXITED = "exited"
-    """psql завершился."""
+    """psql has exited."""
     LOST = "lost"
-    """Worker перестал обновлять отметку «worker жив» (упал или перезапущен) — psql и копия базы потеряны."""
+    """The worker stopped refreshing its "worker is alive" mark (crashed or restarted) — psql and the copy are gone."""
 
 
 def input_stream(sid: str) -> str:
-    """Поток ввода сессии.
+    """The session input stream.
 
-    :param sid: идентификатор сессии.
-    :return: ключ Redis.
+    :param sid: session id.
+    :return: Redis key.
     """
     return f"term:{sid}:in"
 
 
 def output_stream(sid: str) -> str:
-    """Поток вывода сессии.
+    """The session output stream.
 
-    :param sid: идентификатор сессии.
-    :return: ключ Redis.
+    :param sid: session id.
+    :return: Redis key.
     """
     return f"term:{sid}:out"
 
 
 def alive_key(sid: str) -> str:
-    """Отметка «вкладка открыта»: gateway обновляет её, пока браузер подключён; без неё worker закрывает терминал.
+    """The "tab is open" mark: the gateway refreshes it while a browser is connected; without it the worker ends psql.
 
-    :param sid: идентификатор сессии.
-    :return: ключ Redis.
+    :param sid: session id.
+    :return: Redis key.
     """
     return f"term:{sid}:alive"
 
 
 def owner_key(sid: str) -> str:
-    """Отметка «worker жив»: пока ключ есть, worker с этим именем держит psql сессии.
+    """The "worker is alive" mark: while the key exists, the worker with this name runs the session's psql.
 
-    :param sid: идентификатор сессии.
-    :return: ключ Redis.
+    :param sid: session id.
+    :return: Redis key.
     """
     return f"term:{sid}:owner"
 
 
 def meta_key(sid: str) -> str:
-    """Hash со сведениями о сессии: статус, worker, время, число подключённых вкладок.
+    """Hash with session details: status, worker, timestamps, number of connected tabs.
 
-    :param sid: идентификатор сессии.
-    :return: ключ Redis.
+    :param sid: session id.
+    :return: Redis key.
     """
     return f"term:{sid}:meta"

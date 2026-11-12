@@ -1,4 +1,4 @@
-/* Палитра и каркас — общие с rag-from-scratch и job-hunter. */
+/* Palette and layout shared with rag-from-scratch and job_hunter. */
 :root {
   color-scheme: light dark;
   --bg: #f6f7f9; --card: #fff; --fg: #18202b; --muted: #687385; --line: #e3e7ed; --chip: #eef1f5;
@@ -30,7 +30,7 @@ button:hover:not(:disabled) { border-color: var(--accent); }
 button:disabled { opacity: .5; cursor: default; }
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
 
-/* каркас: левая панель + основная область */
+/* layout: side panel + main area */
 :root { --side-w: 220px; }
 html.nav-collapsed { --side-w: 60px; }
 @media (max-width: 760px) { :root { --side-w: 60px; } }
@@ -68,7 +68,7 @@ html.nav-collapsed .sidenav a, html.nav-collapsed .nav-toggle, html.nav-collapse
   .nav-toggle { display: none; }
 }
 
-/* блоки страницы */
+/* page blocks */
 .page { padding: 24px 28px 28px; display: flex; flex-direction: column; gap: 16px; min-height: 100%; }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; }
 .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 12px; }
@@ -83,7 +83,7 @@ html.nav-collapsed .sidenav a, html.nav-collapsed .nav-toggle, html.nav-collapse
   font: 12.5px/1.5 ui-monospace, Consolas, monospace; color: var(--fg); }
 .chip:hover:not(:disabled) { border-color: var(--accent); }
 
-/* терминал: карточка тянется на всю оставшуюся высоту */
+/* terminal: the card stretches to the remaining height */
 .term-card { flex: 1; display: flex; flex-direction: column; min-height: 360px; padding: 0; overflow: hidden;
   background: var(--term); border-color: var(--line); }
 .term-bar { display: flex; align-items: center; gap: 8px; padding: 8px 14px; color: #8b95a5; font-size: 12.5px;
@@ -94,7 +94,7 @@ html.nav-collapsed .sidenav a, html.nav-collapsed .nav-toggle, html.nav-collapse
 #terminal { flex: 1; min-height: 0; padding: 8px 4px 6px 12px; }
 #terminal .xterm-viewport { background: transparent !important; }
 
-/* таблица сессий */
+/* sessions table */
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th { text-align: left; font-weight: 600; color: var(--muted); font-size: 12px; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }

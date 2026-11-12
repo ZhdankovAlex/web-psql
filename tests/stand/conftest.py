@@ -1,13 +1,13 @@
-"""Тесты на запущенном стенде: настоящие gateway, worker, Redis и PostgreSQL.
+"""Tests against a running stack: the real gateway, worker, Redis and PostgreSQL.
 
-Перед запуском поднимите стенд::
+Start the stack first::
 
     docker compose up --build -d --wait
     python -m pytest tests/stand
 
-Адрес стенда — переменная ``STAND_URL`` (по умолчанию ``http://localhost:8000``).
-Если стенд не отвечает, тесты пропускаются; в CI переменная ``STAND_REQUIRED=1``
-превращает пропуск в ошибку, чтобы незапущенный стенд не выглядел как зелёный прогон.
+The stack address is the ``STAND_URL`` variable (default ``http://localhost:8000``).
+If the stack does not answer, the tests are skipped; in CI ``STAND_REQUIRED=1`` turns
+the skip into an error, so a stack that never started does not look like a green run.
 """
 
 from __future__ import annotations
@@ -29,35 +29,35 @@ PROMPT = "bookstore=>"
 
 
 def http_json(path: str) -> object:
-    """GET-запрос к стенду.
+    """GET request to the stack.
 
-    :param path: путь, например ``/api/sessions``.
-    :return: разобранный JSON.
+    :param path: path, e.g. ``/api/sessions``.
+    :return: parsed JSON.
     """
     with urllib.request.urlopen(STAND_URL + path, timeout=5) as resp:
         return json.load(resp)
 
 
 def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
-    """Пропустить тесты стенда, если он не запущен (в CI — упасть)."""
+    """Skip the stack tests if the stack is not running (fail instead in CI)."""
     try:
         http_json("/healthz")
     except OSError as exc:
         if os.environ.get("STAND_REQUIRED") == "1":
-            raise pytest.UsageError(f"стенд {STAND_URL} недоступен: {exc}") from exc
-        skip = pytest.mark.skip(reason=f"стенд {STAND_URL} не запущен")
+            raise pytest.UsageError(f"stack {STAND_URL} is not reachable: {exc}") from exc
+        skip = pytest.mark.skip(reason=f"stack {STAND_URL} is not running")
         for item in items:
             if "stand" in item.keywords:
                 item.add_marker(skip)
 
 
 class Term:
-    """Терминал через WebSocket — как вкладка браузера, только из теста."""
+    """A terminal over WebSocket — like a browser tab, only driven by a test."""
 
     def __init__(self, ws: ClientConnection) -> None:
-        """Обернуть подключение.
+        """Wrap a connection.
 
-        :param ws: открытое WebSocket-подключение.
+        :param ws: an open WebSocket connection.
         """
         self.ws = ws
         self.screen = ""
@@ -70,10 +70,10 @@ class Term:
         self.resumed: bool = hello["resumed"]
 
     def _recv(self, timeout: float) -> dict:
-        """Получить одно сообщение и запомнить вывод.
+        """Receive one message and keep the output.
 
-        :param timeout: сколько ждать, секунд.
-        :return: сообщение.
+        :param timeout: how long to wait, seconds.
+        :return: the message.
         """
         msg = json.loads(self.ws.recv(timeout=timeout))
         if msg["type"] == "output":
@@ -86,27 +86,27 @@ class Term:
         return msg
 
     def wait_for(self, text: str, timeout: float = 10) -> str:
-        """Ждать, пока на экране появится текст.
+        """Wait until the text shows up on the screen.
 
-        :param text: что ищем в выводе.
-        :param timeout: сколько ждать, секунд.
-        :return: весь вывод на этот момент.
+        :param text: what to look for in the output.
+        :param timeout: how long to wait, seconds.
+        :return: all output so far.
         """
         deadline = time.monotonic() + timeout
         while text not in self.screen:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise AssertionError(f"не дождались {text!r}, на экране:\n{self.screen[-2000:]}")
+                raise AssertionError(f"{text!r} never showed up, screen:\n{self.screen[-2000:]}")
             if self._recv(timeout=left)["type"] == "exit":
-                raise AssertionError(f"psql завершился, не дождавшись {text!r}:\n{self.screen[-2000:]}")
+                raise AssertionError(f"psql exited before {text!r} showed up:\n{self.screen[-2000:]}")
         return self.screen
 
     def run(self, command: str, timeout: float = 10) -> str:
-        """Выполнить команду и вернуть её вывод (между командой и следующим приглашением).
+        """Run a command and return its output (between the command and the next prompt).
 
-        :param command: строка для psql.
-        :param timeout: сколько ждать, секунд.
-        :return: вывод команды.
+        :param command: a line for psql.
+        :param timeout: how long to wait, seconds.
+        :return: the command output.
         """
         start = len(self.screen)
         self.ws.send(json.dumps({"type": "input", "data": command + "\r"}))
@@ -114,15 +114,15 @@ class Term:
         while self.screen.count(PROMPT, start) < 1:
             left = deadline - time.monotonic()
             if left <= 0:
-                raise AssertionError(f"нет приглашения после {command!r}:\n{self.screen[start:]}")
+                raise AssertionError(f"no prompt after {command!r}:\n{self.screen[start:]}")
             self._recv(timeout=left)
         return self.screen[start:]
 
     def close(self, timeout: float = 10) -> int | None:
-        """Попросить worker завершить psql и дождаться кода выхода.
+        """Ask the worker to stop psql and wait for the exit code.
 
-        :param timeout: сколько ждать, секунд.
-        :return: код выхода psql.
+        :param timeout: how long to wait, seconds.
+        :return: psql exit code.
         """
         self.ws.send(json.dumps({"type": "close"}))
         deadline = time.monotonic() + timeout
@@ -132,10 +132,10 @@ class Term:
 
 
 def open_term(query: str = "") -> Term:
-    """Открыть сессию и дождаться приглашения psql.
+    """Open a session and wait for the psql prompt.
 
-    :param query: параметры подключения, например ``session=…&last=…``.
-    :return: терминал.
+    :param query: connection parameters, e.g. ``session=…&last=…``.
+    :return: the terminal.
     """
     term = Term(connect(f"{WS_URL}?{query}", open_timeout=10))
     if not term.resumed:
@@ -145,7 +145,7 @@ def open_term(query: str = "") -> Term:
 
 @pytest.fixture
 def term() -> Iterator[Term]:
-    """Новая сессия с чистой копией базы; закрывается после теста."""
+    """A new session with a clean copy of the database; closed after the test."""
     t = open_term("cols=200&rows=50")
     yield t
     if t.exit_code is None:

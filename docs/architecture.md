@@ -1,145 +1,145 @@
-# Как это устроено
+# How it works
 
 ```mermaid
 flowchart LR
-    B["Браузер<br/>xterm.js"] <-- "WebSocket, JSON" --> G["gateway<br/>FastAPI"]
+    B["Browser<br/>xterm.js"] <-- "WebSocket, JSON" --> G["gateway<br/>FastAPI"]
     G <-- "Redis Streams" --> R[("Redis")]
     R <-- "Redis Streams" --> W["worker"]
-    W -- "псевдотерминал" --> P["psql<br/>(пользователь ОС sandbox)"]
-    P -- "пользователь БД s_&lt;id&gt;" --> DB[("PostgreSQL<br/>база sbx_&lt;id&gt;")]
-    W -- "администратор:<br/>создать и удалить копию" --> DB
+    W -- "pseudo-terminal" --> P["psql<br/>(OS user sandbox)"]
+    P -- "database user s_&lt;id&gt;" --> DB[("PostgreSQL<br/>database sbx_&lt;id&gt;")]
+    W -- "administrator:<br/>create and drop copies" --> DB
 ```
 
-| Часть | Код | Что делает |
+| Part | Code | What it does |
 |---|---|---|
-| gateway | [`webpsql/gateway.py`](../webpsql/gateway.py) | Веб-сервер. Отдаёт страницы, держит WebSocket с браузером, проверяет его сообщения по описаниям из [`protocol.py`](../webpsql/protocol.py) и передаёт их через Redis. Сам psql не запускает и ничего не хранит у себя. |
-| worker | [`webpsql/worker.py`](../webpsql/worker.py) | Принимает заявки на сессии, создаёт копию базы ([`sandbox.py`](../webpsql/sandbox.py)), запускает psql в псевдотерминале и пересылает данные между psql и Redis. |
-| Redis | — | Очереди сообщений между gateway и worker'ами и сведения о сессиях. |
-| PostgreSQL | [`db/`](../db/) | Шаблон учебной базы и по одной копии на каждую сессию. |
+| gateway | [`webpsql/gateway.py`](../webpsql/gateway.py) | Web server. Serves the pages, holds the WebSocket with the browser, checks its messages against the models in [`protocol.py`](../webpsql/protocol.py) and passes them on through Redis. Never starts psql and keeps nothing in memory. |
+| worker | [`webpsql/worker.py`](../webpsql/worker.py) | Takes session requests, creates the database copy ([`sandbox.py`](../webpsql/sandbox.py)), starts psql in a pseudo-terminal and moves data between psql and Redis. |
+| Redis | — | Message queues between the gateway and the workers, plus session details. |
+| PostgreSQL | [`db/`](../db/) | The demo database template and one copy per session. |
 
-**Псевдотерминал** (pty) — механизм ОС, благодаря которому программа считает, что работает
-в настоящем окне терминала. Без него psql не показал бы приглашение, не поддерживал бы историю
-команд, автодополнение, Ctrl+C и постраничный просмотр.
+A **pseudo-terminal** (pty) is an OS mechanism that makes a program believe it runs in a real
+terminal window. Without it psql would show no prompt and would not support command history,
+completion, Ctrl+C or paging.
 
-**Redis Streams** — журналы сообщений в Redis: одна сторона дописывает сообщения в конец,
-другая читает их по порядку и помнит, на каком остановилась.
+**Redis Streams** are message logs in Redis: one side appends messages to the end, the other
+reads them in order and remembers where it stopped.
 
-Worker сам подключается к Redis и PostgreSQL и не принимает входящих подключений. Его можно
-держать рядом с базой, не открывая наружу ни одного порта.
+The worker connects to Redis and PostgreSQL itself and accepts no incoming connections. It can
+sit next to the database without opening a single port.
 
-## Что лежит в Redis
+## What is in Redis
 
-| Ключ | Тип | Кто пишет → кто читает | Что внутри |
+| Key | Type | Who writes → who reads | Contents |
 |---|---|---|---|
-| `term:control` | поток | gateway → worker | заявки на новые сессии; каждую получает ровно один worker |
-| `term:{id}:in` | поток | gateway → worker | нажатия клавиш, новый размер окна, команда закрыть сессию |
-| `term:{id}:out` | поток | worker → gateway | вывод psql, ошибки, код завершения |
-| `term:{id}:alive` | строка, живёт 60 с | gateway | «вкладка открыта» — gateway обновляет, пока браузер подключён |
-| `term:{id}:owner` | строка, живёт 15 с | worker | «worker жив и держит эту сессию» — worker обновляет каждые 5 с |
-| `term:{id}:meta` | хеш | gateway и worker | статус, имя worker'а, номер процесса psql, имя копии базы и время её создания, размер окна, число вкладок |
+| `term:control` | stream | gateway → worker | requests for new sessions; each one goes to exactly one worker |
+| `term:{id}:in` | stream | gateway → worker | key presses, new window size, the close command |
+| `term:{id}:out` | stream | worker → gateway | psql output, errors, exit code |
+| `term:{id}:alive` | string, lives 60 s | gateway | "tab is open" — the gateway refreshes it while a browser is connected |
+| `term:{id}:owner` | string, lives 15 s | worker | "worker is alive and runs this session" — the worker refreshes it every 5 s |
+| `term:{id}:meta` | hash | gateway and worker | status, worker name, psql process id, database copy name and how long it took, window size, number of tabs |
 
-Типы сообщений и статусы сессий перечислены в [`webpsql/streams.py`](../webpsql/streams.py).
+Message types and session statuses are listed in [`webpsql/streams.py`](../webpsql/streams.py).
 
-## Как живёт сессия
+## Life of a session
 
 ```mermaid
 sequenceDiagram
-    participant B as Браузер
+    participant B as Browser
     participant G as gateway
     participant R as Redis
     participant W as worker
     participant PG as PostgreSQL
 
-    B->>G: открыть WebSocket /ws
-    G->>R: «вкладка открыта», статус «ждёт worker», заявка на сессию
-    G-->>B: session — номер сессии
-    R-->>W: заявку получает один из worker'ов
-    W->>R: «worker жив» (обновляется каждые 5 с)
-    W->>PG: создать пользователя s_id и копию базы sbx_id из шаблона
-    W->>W: запустить psql в псевдотерминале
-    W->>R: статус «работает», приветствие psql
-    loop пока сессия открыта
-        B->>G: нажатия клавиш, размер окна
-        G->>R: в поток ввода
-        R-->>W: записать в псевдотерминал
-        W->>R: вывод psql — в поток вывода
-        R-->>G: новые сообщения
+    B->>G: open WebSocket /ws
+    G->>R: "tab is open", status "waiting for worker", session request
+    G-->>B: session — the session id
+    R-->>W: one of the workers gets the request
+    W->>R: "worker is alive" (refreshed every 5 s)
+    W->>PG: create user s_id and copy the template into sbx_id
+    W->>W: start psql in a pseudo-terminal
+    W->>R: status "running", psql greeting
+    loop while the session is open
+        B->>G: key presses, window size
+        G->>R: into the input stream
+        R-->>W: write to the pseudo-terminal
+        W->>R: psql output into the output stream
+        R-->>G: new messages
         G-->>B: output
     end
-    B->>G: закрыть (или вкладку закрыли, и через 60 с отметка «вкладка открыта» пропала)
-    G->>R: команда закрыть
-    W->>W: завершить psql
-    W->>PG: удалить копию базы и пользователя
-    W->>R: код завершения, статус «завершена»
+    B->>G: close (or the tab was closed and "tab is open" expired after 60 s)
+    G->>R: close command
+    W->>W: stop psql
+    W->>PG: drop the database copy and the user
+    W->>R: exit code, status "finished"
     G-->>B: exit
 ```
 
-## Если связь пропала
+## When the connection drops
 
-У каждого куска вывода есть номер — его позиция в потоке Redis. Браузер запоминает номер
-сессии и номер последнего полученного куска:
+Every piece of output has a number — its position in the Redis stream. The browser remembers
+the session id and the number of the last piece it received:
 
-- **пропала сеть** — браузер переподключается и просит вывод начиная со следующего куска;
-- **страницу перезагрузили** — экран пустой, поэтому браузер просит весь вывод с начала
-  и восстанавливает то, что было на экране;
-- **вкладку закрыли** — отметка «вкладка открыта» перестаёт обновляться, и через 60 секунд
-  worker завершает psql и удаляет копию базы.
+- **the network dropped** — the browser reconnects and asks for output starting after that piece;
+- **the page was reloaded** — the screen is empty, so the browser asks for all output from the
+  start and restores what was on the screen;
+- **the tab was closed** — the "tab is open" mark stops being refreshed, and after 60 seconds
+  the worker stops psql and drops the database copy.
 
-Пока браузер переподключается, psql продолжает работать: начатая транзакция никуда не денется.
+While the browser reconnects, psql keeps running: an open transaction does not go anywhere.
 
-## Если worker упал
+## When a worker crashes
 
-Worker раз в 5 секунд обновляет отметку «worker жив» для каждой своей сессии, отметка живёт
-15 секунд. Если worker упал, через 15 секунд она пропадает:
+The worker refreshes the "worker is alive" mark for each of its sessions every 5 seconds;
+the mark lives 15 seconds. If the worker crashes, the mark disappears 15 seconds later:
 
-- gateway замечает это, помечает сессию «потеряна» и сообщает браузеру. Проверено: после
-  `docker compose kill worker` браузер узнал об этом через ~12 секунд;
-- любой работающий worker раз в минуту (и сразу при запуске) ищет копии баз без такой отметки
-  и удаляет их вместе с пользователями.
+- the gateway notices, marks the session "lost" and tells the browser. Tested: after
+  `docker compose kill worker` the browser found out in about 12 seconds;
+- every running worker looks for database copies without such a mark once a minute (and right
+  at startup) and drops them together with their users.
 
-## Сообщения WebSocket `/ws`
+## WebSocket `/ws` messages
 
-Каждое сообщение — JSON с полем `type`. Для каждого типа в
-[`webpsql/protocol.py`](../webpsql/protocol.py) есть описание на Pydantic, и по полю `type`
-gateway выбирает, каким описанием проверять сообщение. Сообщение неизвестного типа или
-с неправильными полями не проходит дальше, а браузер получает `error` с причиной.
+Every message is JSON with a `type` field. Each type has a Pydantic model in
+[`webpsql/protocol.py`](../webpsql/protocol.py), and the gateway uses `type` to pick the model
+that checks the message. A message of an unknown type or with wrong fields goes no further, and
+the browser gets an `error` with the reason.
 
-| Кто отправляет | `type` | Поля |
+| Sent by | `type` | Fields |
 |---|---|---|
-| браузер | `input` | `data` — нажатые клавиши или вставленный текст, до 64 КБ |
-| браузер | `resize` | `cols`, `rows` — размер окна, от 2 до 1000 |
-| браузер | `close` | — |
-| сервер | `session` | `id` — номер сессии, `resumed` — подключились ли к уже работающему psql |
-| сервер | `output` | `data` — вывод psql, `id` — номер куска в потоке |
-| сервер | `error` | `message` |
-| сервер | `exit` | `code` — код завершения psql; отрицательный, если psql остановлен сигналом или не запустился |
+| browser | `input` | `data` — key presses or pasted text, up to 64 KB |
+| browser | `resize` | `cols`, `rows` — window size, 2 to 1000 |
+| browser | `close` | — |
+| server | `session` | `id` — session id, `resumed` — whether we reconnected to a running psql |
+| server | `output` | `data` — psql output, `id` — position in the stream |
+| server | `error` | `message` |
+| server | `exit` | `code` — psql exit code; negative if psql was stopped by a signal or never started |
 
-Новая сессия — `/ws?cols=…&rows=…`. Вернуться к работающей — `/ws?session=<номер>&last=<номер куска>`.
-Размер окна браузер отправляет не чаще раза в 200 мс.
+New session — `/ws?cols=…&rows=…`. Back to a running one — `/ws?session=<id>&last=<piece id>`.
+The browser sends the window size at most once every 200 ms.
 
 ## HTTP
 
-Описание в Swagger — <http://localhost:8000/docs>.
+Swagger is at <http://localhost:8000/docs>.
 
-| Запрос | Что возвращает |
+| Request | Returns |
 |---|---|
-| `GET /api/sessions` | все сессии, новые сверху; завершённые видны ещё 5 минут |
-| `GET /api/sessions/{id}` | одну сессию или `404` |
-| `GET /healthz` | `{"redis": true}`, если сервер видит Redis |
+| `GET /api/sessions` | all sessions, newest first; finished ones stay visible for 5 more minutes |
+| `GET /api/sessions/{id}` | one session or `404` |
+| `GET /healthz` | `{"redis": true}` if the server can reach Redis |
 
-## Настройки
+## Settings
 
-| Переменная | По умолчанию | Кто читает | Зачем |
+| Variable | Default | Read by | Purpose |
 |---|---|---|---|
-| `REDIS_URL` | `redis://localhost:6379/0` | оба | адрес Redis |
-| `ADMIN_DSN` | `postgresql://postgres@localhost/postgres` | worker | администратор PostgreSQL — создаёт и удаляет копии баз |
-| `PG_HOST`, `PG_PORT` | `localhost`, `5432` | worker | куда подключается psql |
-| `PSQL_CMD` | `psql` | worker | какую программу запускать в терминале |
-| `SANDBOX_USER` | — | worker | от какого пользователя ОС запускать psql; если пусто — от того же, что и worker |
-| `SANDBOX_NPROC` | `256` | worker | сколько процессов одновременно может запустить этот пользователь |
-| `MAX_SESSIONS` | `10` | worker | сколько терминалов держит один worker |
-| `HEARTBEAT_TTL` | `60` | оба | сколько секунд ждать браузер после обрыва связи |
-| `STREAM_MAXLEN` | `2000` | worker | сколько последних кусков вывода хранить для переподключения |
+| `REDIS_URL` | `redis://localhost:6379/0` | both | Redis address |
+| `ADMIN_DSN` | `postgresql://postgres@localhost/postgres` | worker | PostgreSQL administrator — creates and drops database copies |
+| `PG_HOST`, `PG_PORT` | `localhost`, `5432` | worker | where psql connects |
+| `PSQL_CMD` | `psql` | worker | which program to run in the terminal |
+| `SANDBOX_USER` | — | worker | OS user that runs psql; if empty, the worker's own user |
+| `SANDBOX_NPROC` | `256` | worker | how many processes that user may run at once |
+| `MAX_SESSIONS` | `10` | worker | how many terminals one worker runs |
+| `HEARTBEAT_TTL` | `60` | both | how many seconds to wait for the browser after a dropped connection |
+| `STREAM_MAXLEN` | `2000` | worker | how many recent pieces of output to keep for reconnects |
 
-Пароли в `docker-compose.yml` берутся из `POSTGRES_PASSWORD` и `REDIS_PASSWORD` (файл `.env`),
-по умолчанию — `web-psql`.
+The passwords in `docker-compose.yml` come from `POSTGRES_PASSWORD` and `REDIS_PASSWORD`
+(an `.env` file); the default is `web-psql`.

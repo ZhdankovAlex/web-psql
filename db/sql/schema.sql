@@ -1,4 +1,4 @@
--- Учебная база книжного магазина: несколько связанных таблиц, индексы и представление.
+-- Demo bookstore database: a few related tables, indexes and a view.
 
 create table authors (
     id         serial primary key,
@@ -56,9 +56,9 @@ group by a.name
 order by revenue desc
 limit 10;
 
-comment on table authors     is 'Авторы';
-comment on table books       is 'Книги в каталоге';
-comment on table customers   is 'Покупатели';
-comment on table orders      is 'Заказы';
-comment on table order_items is 'Позиции заказов';
-comment on view  top_authors is 'Десять авторов с наибольшей выручкой';
+comment on table authors     is 'Authors';
+comment on table books       is 'Books in the catalogue';
+comment on table customers   is 'Customers';
+comment on table orders      is 'Orders';
+comment on table order_items is 'Order lines';
+comment on view  top_authors is 'Ten authors with the highest revenue';

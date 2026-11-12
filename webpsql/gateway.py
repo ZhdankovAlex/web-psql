@@ -1,10 +1,10 @@
-"""Gateway: веб-страница и WebSocket между браузером и Redis Streams.
+"""Gateway: web pages and the WebSocket between the browser and Redis Streams.
 
-Запуск: ``uvicorn webpsql.gateway:app --host 0.0.0.0 --port 8000``.
+Run: ``uvicorn webpsql.gateway:app --host 0.0.0.0 --port 8000``.
 
-Протокол WebSocket ``/ws`` описан моделями в :mod:`webpsql.protocol`.
-Параметры подключения: ``?cols=&rows=`` для новой сессии,
-``?session=<id>&last=<id>`` — вернуться к работающей сессии и получить пропущенный вывод.
+The ``/ws`` WebSocket messages are described by the models in :mod:`webpsql.protocol`.
+Connection parameters: ``?cols=&rows=`` for a new session,
+``?session=<id>&last=<id>`` to come back to a running session and get the output you missed.
 """
 
 from __future__ import annotations
@@ -57,11 +57,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Открыть подключение к Redis на время работы приложения.
+    """Open the Redis connection for the lifetime of the app.
 
-    :param app: приложение FastAPI.
+    :param app: the FastAPI app.
     """
-    # socket_timeout=None: XREAD BLOCK держит соединение дольше любого разумного таймаута
+    # socket_timeout=None: XREAD BLOCK keeps the connection waiting longer than any sane timeout
     app.state.redis = aioredis.from_url(settings.redis_url, decode_responses=True, socket_timeout=None)
     yield
     await app.state.redis.aclose()
@@ -69,54 +69,54 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(
     title="web-psql",
-    description="psql в браузере: WebSocket ↔ Redis Streams ↔ pty.\n\n"
-                "Сам терминал работает через WebSocket `/ws` (Swagger его не показывает), "
-                "протокол описан в README. Здесь — служебные HTTP-методы.",
+    description="psql in the browser: WebSocket ↔ Redis Streams ↔ pseudo-terminal.\n\n"
+                "The terminal itself works over the `/ws` WebSocket (Swagger does not show it); "
+                "its messages are described in the README. This page lists the HTTP endpoints.",
     lifespan=lifespan,
 )
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 def _redis() -> aioredis.Redis:
-    """Клиент Redis, открытый в :func:`lifespan`."""
+    """The Redis client opened in :func:`lifespan`."""
     return app.state.redis
 
 
 @app.get("/", include_in_schema=False)
 async def index() -> FileResponse:
-    """Отдать страницу с терминалом."""
+    """Serve the terminal page."""
     return FileResponse(STATIC_DIR / "index.html")
 
 
 @app.get("/sessions", include_in_schema=False)
 async def sessions_page() -> FileResponse:
-    """Отдать страницу со списком сессий."""
+    """Serve the sessions page."""
     return FileResponse(STATIC_DIR / "sessions.html")
 
 
-@app.get("/healthz", summary="Проверка живости", response_description="`{\"redis\": true}`, если Redis отвечает")
+@app.get("/healthz", summary="Health check", response_description="`{\"redis\": true}` if Redis answers")
 async def healthz() -> dict[str, bool]:
-    """Проверить, что gateway работает и видит Redis."""
+    """Check that the gateway is up and can reach Redis."""
     return {"redis": bool(await _redis().ping())}
 
 
 def _session_info(sid: str, meta: dict[str, str]) -> SessionInfo:
-    """Собрать :class:`SessionInfo` из hash ``term:{sid}:meta``.
+    """Build :class:`SessionInfo` from the ``term:{sid}:meta`` hash.
 
-    :param sid: идентификатор сессии.
-    :param meta: поля hash (пустые строки считаются отсутствующими).
-    :return: сведения о сессии.
+    :param sid: session id.
+    :param meta: hash fields (empty strings mean "no value").
+    :return: session details.
     """
     return SessionInfo(id=sid, **{k: v for k, v in meta.items() if v != ""})
 
 
 @app.get(
     "/api/sessions",
-    summary="Открытые сессии",
-    response_description="Сессии, сначала новые. Завершённые видны ещё 5 минут.",
+    summary="Terminal sessions",
+    response_description="Sessions, newest first. Finished ones stay visible for 5 more minutes.",
 )
 async def list_sessions() -> list[SessionInfo]:
-    """Показать сессии терминала: на каком worker'е работает psql и подключён ли браузер."""
+    """List terminal sessions: which worker runs psql and whether a browser is connected."""
     redis = _redis()
     sessions = []
     async for key in redis.scan_iter(match=META_PATTERN, count=100):
@@ -128,30 +128,30 @@ async def list_sessions() -> list[SessionInfo]:
 
 @app.get(
     "/api/sessions/{sid}",
-    summary="Одна сессия",
-    responses={404: {"description": "Сессии нет или она завершилась больше 5 минут назад"}},
+    summary="One session",
+    responses={404: {"description": "No such session, or it finished more than 5 minutes ago"}},
 )
 async def get_session(sid: str) -> SessionInfo:
-    """Показать сведения об одной сессии.
+    """Show the details of one session.
 
-    :param sid: идентификатор сессии.
+    :param sid: session id.
     """
     meta = await _redis().hgetall(meta_key(sid))
     if not meta:
-        raise HTTPException(status_code=404, detail="сессия не найдена")
+        raise HTTPException(status_code=404, detail="session not found")
     return _session_info(sid, meta)
 
 
 class Session:
-    """Одно WebSocket-подключение, привязанное к сессии терминала."""
+    """One WebSocket connection attached to a terminal session."""
 
     def __init__(self, ws: WebSocket, redis: aioredis.Redis, sid: str, last_id: str) -> None:
-        """Связать WebSocket с сессией.
+        """Attach the WebSocket to a session.
 
-        :param ws: принятый WebSocket.
-        :param redis: клиент Redis.
-        :param sid: идентификатор сессии.
-        :param last_id: с какой позиции потока вывода начинать (``0-0`` — с начала).
+        :param ws: the accepted WebSocket.
+        :param redis: Redis client.
+        :param sid: session id.
+        :param last_id: where to start reading the output stream (``0-0`` — from the beginning).
         """
         self.ws = ws
         self.redis = redis
@@ -159,43 +159,43 @@ class Session:
         self.last_id = last_id
 
     async def send(self, message: ServerMessage) -> None:
-        """Отправить сообщение браузеру.
+        """Send a message to the browser.
 
-        :param message: одна из моделей сервер → браузер.
+        :param message: one of the server → browser models.
         """
         await self.ws.send_text(message.model_dump_json())
 
     async def heartbeat(self) -> None:
-        """Обновлять отметку «вкладка открыта», пока браузер подключён."""
+        """Keep the "tab is open" mark fresh while the browser is connected."""
         ttl = settings.heartbeat_ttl
         while True:
             await self.redis.set(alive_key(self.sid), "1", ex=ttl)
             await asyncio.sleep(max(1, ttl // 3))
 
     async def watch_worker(self) -> None:
-        """Закрыть сессию, если worker перестал обновлять отметку «worker жив» (упал или перезапущен)."""
+        """End the session if the worker stopped refreshing its "worker is alive" mark (crashed or restarted)."""
         while True:
             await asyncio.sleep(OWNER_RENEW)
             status = await self.redis.hget(meta_key(self.sid), "status")
             if status == SessionStatus.RUNNING and not await self.redis.exists(owner_key(self.sid)):
-                log.warning("session %s: worker пропал", self.sid)
+                log.warning("session %s: the worker is gone", self.sid)
                 await self.redis.hset(meta_key(self.sid), mapping={
                     "status": SessionStatus.LOST, "finished_at": datetime.now(UTC).isoformat(),
                 })
                 await self.redis.expire(meta_key(self.sid), 300)
                 await self.redis.delete(alive_key(self.sid))
-                await self.send(ErrorMessage(message="worker с этим psql перезапустился — сессия потеряна"))
+                await self.send(ErrorMessage(message="the worker running this psql restarted — the session is lost"))
                 await self.send(ExitMessage(code=-1))
                 return
 
     async def browser_to_redis(self) -> None:
-        """Проверить сообщения браузера и переложить их в поток ввода сессии."""
+        """Check the browser's messages and pass them on to the session input stream."""
         stream = input_stream(self.sid)
         while True:
             try:
                 msg = client_message.validate_json(await self.ws.receive_text())
             except ValidationError as exc:
-                await self.send(ErrorMessage(message=f"непонятное сообщение: {exc.errors()[0]['msg']}"))
+                await self.send(ErrorMessage(message=f"invalid message: {exc.errors()[0]['msg']}"))
                 continue
             match msg:
                 case InputMessage(data=data):
@@ -206,7 +206,7 @@ class Session:
                     await self.redis.xadd(stream, {"kind": Kind.CLOSE})
 
     async def redis_to_browser(self) -> None:
-        """Читать поток вывода сессии и отправлять его в браузер, пока psql не завершится."""
+        """Read the session output stream and send it to the browser until psql exits."""
         stream = output_stream(self.sid)
         while True:
             batches = await self.redis.xread({stream: self.last_id}, block=5000, count=200)
@@ -224,15 +224,15 @@ class Session:
 
 
 async def _open_session(redis: aioredis.Redis, cols: str, rows: str) -> str:
-    """Завести новую сессию и отправить worker'ам заявку на неё.
+    """Create a new session and send the workers a request for it.
 
-    :param redis: клиент Redis.
-    :param cols: ширина терминала из параметров подключения.
-    :param rows: высота терминала из параметров подключения.
-    :return: идентификатор новой сессии.
+    :param redis: Redis client.
+    :param cols: terminal width from the connection parameters.
+    :param rows: terminal height from the connection parameters.
+    :return: the new session id.
     """
     sid = uuid.uuid4().hex
-    # отметку «вкладка открыта» ставим до заявки, иначе worker сразу закроет сессию
+    # set the "tab is open" mark before the request, otherwise the worker would end the session right away
     await redis.set(alive_key(sid), "1", ex=settings.heartbeat_ttl)
     await redis.hset(meta_key(sid), mapping={
         "status": SessionStatus.PENDING, "connections": 0,
@@ -245,9 +245,9 @@ async def _open_session(redis: aioredis.Redis, cols: str, rows: str) -> str:
 
 @app.websocket("/ws")
 async def terminal_ws(ws: WebSocket) -> None:
-    """Подключить браузер к новой или работающей сессии терминала.
+    """Connect the browser to a new or a running terminal session.
 
-    :param ws: WebSocket от браузера.
+    :param ws: WebSocket from the browser.
     """
     await ws.accept()
     redis = _redis()
@@ -284,5 +284,5 @@ async def terminal_ws(ws: WebSocket) -> None:
             await redis.hincrby(meta_key(sid), "connections", -1)
         with contextlib.suppress(Exception):
             await ws.close()
-    # Если браузер просто отключился, psql живёт ещё heartbeat_ttl секунд —
-    # за это время можно переподключиться с тем же session id.
+    # If the browser just disconnected, psql keeps running for heartbeat_ttl more seconds —
+    # the browser can reconnect with the same session id during that time.

@@ -1,5 +1,5 @@
--- Настройки psql в песочнице (файл передаётся через PSQLRC).
--- Настоящее имя базы — sbx_<id сессии>; в приглашении показываем понятное «bookstore».
+-- psql settings for the sandbox (passed through PSQLRC).
+-- The real database name is sbx_<session id>; the prompt shows a friendly "bookstore" instead.
 \set QUIET 1
 \set PROMPT1 '%[%033[1;36m%]bookstore%[%033[0m%]%R%# '
 \set PROMPT2 '%[%033[1;36m%]bookstore%[%033[0m%]%R%# '

@@ -1,10 +1,10 @@
--- Выполняется один раз при первом старте контейнера postgres (от имени суперпользователя).
+-- Runs once, on the first start of the postgres container (as the superuser).
 --
--- Готовит шаблон, из которого worker копирует базу для каждой сессии:
---   * sandbox_owner  — роль без входа, владелец всех таблиц шаблона;
---   * bookstore_template — шаблонная база, подключаться к ней нельзя.
--- Роль каждой сессии входит в sandbox_owner, поэтому в своей копии может делать что угодно
--- (в том числе DROP TABLE), а к чужим копиям и служебным базам подключиться не может.
+-- Prepares the template the worker copies for every session:
+--   * sandbox_owner      — a user that cannot log in; owns every table in the template;
+--   * bookstore_template — the template database; nobody can connect to it.
+-- Each session user is a member of sandbox_owner, so it can do anything in its own copy
+-- (including DROP TABLE), but cannot connect to other copies or to the system databases.
 
 create role sandbox_owner nologin;
 create database bookstore_template owner sandbox_owner;
@@ -18,7 +18,7 @@ reset role;
 \connect postgres
 alter database bookstore_template with is_template true allow_connections false;
 
--- По умолчанию подключаться к любой базе может PUBLIC. Закрываем служебные базы:
--- роль сессии должна видеть только свою копию.
+-- By default anyone (PUBLIC) may connect to any database. Close the system databases:
+-- a session user should only see its own copy.
 revoke connect on database postgres  from public;
 revoke connect on database template1 from public;

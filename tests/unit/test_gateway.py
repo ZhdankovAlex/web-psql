@@ -1,4 +1,4 @@
-"""gateway без Docker: HTTP API и WebSocket на Redis в памяти (fakeredis)."""
+"""The gateway without Docker: HTTP API and WebSocket on an in-memory Redis (fakeredis)."""
 
 import fakeredis
 import pytest
@@ -10,9 +10,9 @@ from webpsql.streams import CONTROL_STREAM, Kind, SessionStatus, alive_key, meta
 
 @pytest.fixture
 def client(monkeypatch):
-    """TestClient, у которого вместо настоящего Redis — fakeredis.
+    """TestClient with fakeredis instead of a real Redis.
 
-    :return: клиент и подменный Redis.
+    :return: the client and the fake Redis.
     """
     server = fakeredis.FakeServer()
     fake = fakeredis.FakeAsyncRedis(server=server, decode_responses=True)
@@ -28,8 +28,8 @@ def test_healthz(client):
 
 def test_pages_are_served(client):
     c, _ = client
-    assert "Терминал" in c.get("/").text
-    assert "Сессии" in c.get("/sessions").text
+    assert "<h1>Terminal</h1>" in c.get("/").text
+    assert "<h1>Sessions</h1>" in c.get("/sessions").text
 
 
 def test_sessions_empty(client):
@@ -49,7 +49,7 @@ def test_sessions_list_newest_first(client):
     sessions = c.get("/api/sessions").json()
     assert [s["id"] for s in sessions] == ["new", "old"]
     assert sessions[0]["pid"] == 7
-    assert sessions[1]["pid"] is None  # пустая строка из Redis — это «нет значения»
+    assert sessions[1]["pid"] is None  # an empty string from Redis means "no value"
 
 
 def test_new_session_files_a_request(client):
@@ -77,20 +77,20 @@ def test_bad_message_gets_error(client):
 
 
 def test_resume_replays_missed_output(client):
-    """Переподключение к живой сессии отдаёт только вывод после last."""
+    """Reconnecting to a live session returns only the output after `last`."""
     c, r = client
     sid = "a" * 32
     r.set(alive_key(sid), "1")
     r.hset(meta_key(sid), mapping={"status": "running", "created_at": "2026-11-12T10:00:00+00:00"})
-    first = r.xadd(output_stream(sid), {"kind": "output", "data": "уже видели"})
-    r.xadd(output_stream(sid), {"kind": "output", "data": "пропущено"})
+    first = r.xadd(output_stream(sid), {"kind": "output", "data": "already seen"})
+    r.xadd(output_stream(sid), {"kind": "output", "data": "missed"})
     r.xadd(output_stream(sid), {"kind": "exit", "code": "0"})
 
     with c.websocket_connect(f"/ws?session={sid}&last={first}") as ws:
         assert ws.receive_json() == {"type": "session", "id": sid, "resumed": True}
         out = ws.receive_json()
         assert out["type"] == "output"
-        assert out["data"] == "пропущено"
+        assert out["data"] == "missed"
         assert ws.receive_json() == {"type": "exit", "code": 0}
 
 

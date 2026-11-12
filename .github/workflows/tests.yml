@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  # Быстрая проверка без Docker: линтер и тесты, где Redis заменён на fakeredis.
+  # Quick check without Docker: linter and tests with Redis replaced by fakeredis.
   unit:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -27,8 +27,8 @@ jobs:
       - name: Unit tests
         run: python -m pytest tests/unit -q
 
-  # Весь стенд в docker compose и тесты через настоящий WebSocket:
-  # копия базы, «сломал — начал заново», запреты песочницы, переподключение.
+  # The whole stack in docker compose and tests over a real WebSocket:
+  # database copy, "break it and start over", sandbox restrictions, reconnect.
   stand:
     needs: unit
     runs-on: ubuntu-latest

@@ -1,4 +1,4 @@
-"""Главное, что обещает проект, — на настоящем стенде."""
+"""The main promises of the project, checked on a real running stack."""
 
 import re
 import time
@@ -11,10 +11,10 @@ pytestmark = pytest.mark.stand
 
 
 def single_value(out: str) -> str:
-    """Значение из вывода ``select`` с одной строкой и одним столбцом.
+    """The value from a ``select`` output with one row and one column.
 
-    :param out: вывод psql.
-    :return: значение в строке под заголовком.
+    :param out: psql output.
+    :return: the value on the line under the header.
     """
     match = re.search(r"^-+\n\s*(.*?)\s*\n\(1 row\)", out, re.M)
     assert match, out
@@ -22,12 +22,12 @@ def single_value(out: str) -> str:
 
 
 def wait_status(sid: str, status: str, timeout: float = 10) -> dict:
-    """Дождаться статуса сессии в ``/api/sessions/{sid}``.
+    """Wait for a session status in ``/api/sessions/{sid}``.
 
-    :param sid: номер сессии.
-    :param status: какой статус ждём.
-    :param timeout: сколько ждать, секунд.
-    :return: сведения о сессии.
+    :param sid: session id.
+    :param status: the status to wait for.
+    :param timeout: how long to wait, seconds.
+    :return: session details.
     """
     deadline = time.monotonic() + timeout
     while True:
@@ -39,7 +39,7 @@ def wait_status(sid: str, status: str, timeout: float = 10) -> dict:
 
 
 def test_query_runs_in_own_copy(term: Term):
-    assert "Своя копия базы bookstore готова" in term.screen
+    assert "Your own copy of the bookstore database is ready" in term.screen
     assert single_value(term.run("select count(*) from books;")) == "30"
     info = wait_status(term.sid, "running")
     assert info["database"] == f"sbx_{term.sid}"
@@ -85,19 +85,19 @@ def test_shell_runs_as_unprivileged_user_without_secrets(term: Term):
 
 
 def test_reconnect_returns_only_missed_output(term: Term):
-    term.run("select 'до обрыва';")
+    term.run("select 'before the drop';")
     seen = term.last_id
-    term.ws.close()  # «пропала сеть»; psql при этом продолжает работать
+    term.ws.close()  # "the network dropped"; psql keeps running meanwhile
 
     again = open_term(f"session={term.sid}&last={seen}")
     try:
         assert again.resumed
-        out = again.run("select 'после обрыва';")
-        assert "после обрыва" in out
-        assert "до обрыва" not in again.screen
+        out = again.run("select 'after the drop';")
+        assert "after the drop" in out
+        assert "before the drop" not in again.screen
     finally:
         again.close()
-        term.exit_code = 0  # фикстуре закрывать уже нечего
+        term.exit_code = 0  # nothing left for the fixture to close
 
 
 def test_bad_message_is_rejected(term: Term):
@@ -106,4 +106,4 @@ def test_bad_message_is_rejected(term: Term):
     while not term.errors and time.monotonic() < deadline:
         term._recv(timeout=deadline - time.monotonic())
     assert term.errors
-    assert PROMPT in term.run("select 1;")  # сессия после этого жива
+    assert PROMPT in term.run("select 1;")  # the session is still alive afterwards

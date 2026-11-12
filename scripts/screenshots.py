@@ -1,11 +1,11 @@
-"""Снять скриншоты для README с работающего стенда.
+"""Take the README screenshots from a running stack.
 
-Нужен Playwright (``pip install playwright``) и установленный Google Chrome::
+Needs Playwright (``pip install playwright``) and an installed Google Chrome::
 
     docker compose up --build -d
     python scripts/screenshots.py
 
-Картинки сохраняются в ``assets/``.
+Images are saved to ``assets/``.
 """
 
 from __future__ import annotations
@@ -20,11 +20,11 @@ ASSETS = Path(__file__).resolve().parent.parent / "assets"
 
 
 def run_sql(page: Page, sql: str, wait_ms: int = 900) -> None:
-    """Набрать команду в терминале и нажать Enter.
+    """Type a command in the terminal and press Enter.
 
-    :param page: страница с терминалом.
-    :param sql: команда psql.
-    :param wait_ms: сколько ждать вывода.
+    :param page: the terminal page.
+    :param sql: psql command.
+    :param wait_ms: how long to wait for the output.
     """
     page.locator("#terminal").click()
     page.keyboard.type(sql)
@@ -33,9 +33,9 @@ def run_sql(page: Page, sql: str, wait_ms: int = 900) -> None:
 
 
 def open_terminal(page: Page) -> None:
-    """Открыть терминал и дождаться, пока psql создаст копию базы.
+    """Open the terminal and wait until the database copy is ready.
 
-    :param page: страница.
+    :param page: the page.
     """
     page.goto(BASE)
     page.wait_for_selector("#st-db.ok", timeout=15000)
@@ -43,7 +43,7 @@ def open_terminal(page: Page) -> None:
 
 
 def main() -> None:
-    """Снять три скриншота: запрос, «сломанная» база, список сессий."""
+    """Take three screenshots: a query, a "broken" database, the sessions list."""
     ASSETS.mkdir(exist_ok=True)
     with sync_playwright() as p:
         browser = p.chromium.launch(channel="chrome")
@@ -61,7 +61,7 @@ def main() -> None:
         run_sql(page, "\\dt")
         page.screenshot(path=ASSETS / "sandbox.png")
 
-        # ещё пара вкладок, чтобы в таблице сессий было на что посмотреть
+        # a couple more tabs, so the sessions table has something to show
         others = [ctx.new_page() for _ in range(2)]
         for other in others:
             open_terminal(other)
@@ -71,7 +71,7 @@ def main() -> None:
         page.screenshot(path=ASSETS / "sessions.png")
 
         browser.close()
-    print("готово:", ", ".join(f.name for f in sorted(ASSETS.glob("*.png"))))
+    print("done:", ", ".join(f.name for f in sorted(ASSETS.glob("*.png"))))
 
 
 if __name__ == "__main__":

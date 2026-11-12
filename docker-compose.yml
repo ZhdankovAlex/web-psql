@@ -1,8 +1,8 @@
-# Запуск всего стенда: docker compose up --build
-# Затем откройте http://localhost:8000
+# Start the whole stack: docker compose up --build
+# Then open http://localhost:8000
 #
-# Пароли можно переопределить через .env (POSTGRES_PASSWORD, REDIS_PASSWORD) —
-# обязательно сделайте это, если стенд будет доступен не только вам.
+# Passwords can be overridden in .env (POSTGRES_PASSWORD, REDIS_PASSWORD) —
+# be sure to do it if anyone but you can reach the stack.
 
 x-redis-url: &redis-url redis://:${REDIS_PASSWORD:-web-psql}@redis:6379/0
 
@@ -15,8 +15,8 @@ services:
       - ./db/init:/docker-entrypoint-initdb.d:ro
       - ./db/sql:/sql:ro
     healthcheck:
-      # по TCP: во время заливки шаблона сервер слушает только unix-сокет,
-      # так что "healthy" наступает, когда данные уже готовы
+      # over TCP: while the template is being loaded the server listens only on a unix socket,
+      # so "healthy" means the data is already in place
       test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres"]
       interval: 2s
       timeout: 3s
@@ -37,7 +37,7 @@ services:
     build: .
     restart: unless-stopped
     command: ["python", "-m", "webpsql.worker"]
-    # root нужен только чтобы запускать psql от имени пользователя sandbox
+    # root is needed only to start psql as the sandbox user
     user: root
     environment:
       REDIS_URL: *redis-url
@@ -45,7 +45,7 @@ services:
       PG_HOST: postgres
       SANDBOX_USER: sandbox
       MAX_SESSIONS: "10"
-    # ограничение на всё, что пользователи запустят через \! в psql
+    # a cap on everything users start through \! in psql
     pids_limit: 512
     mem_limit: 1g
     depends_on:

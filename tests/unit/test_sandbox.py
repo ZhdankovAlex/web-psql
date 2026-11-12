@@ -1,4 +1,4 @@
-"""Имена копий баз подставляются прямо в SQL — проверяем, что туда не попадёт лишнее."""
+"""Database copy names go straight into SQL — make sure nothing else can get in there."""
 
 import pytest
 
@@ -12,7 +12,7 @@ def test_names_for_valid_session():
 
 
 def test_names_fit_postgres_limit():
-    """PostgreSQL обрезает имена длиннее 63 байт — две сессии не должны получить одно имя."""
+    """PostgreSQL truncates names longer than 63 bytes — two sessions must not end up with the same name."""
     database, role = _names(SID)
     assert len(database) <= 63
     assert len(role) <= 63
@@ -21,7 +21,7 @@ def test_names_fit_postgres_limit():
 @pytest.mark.parametrize("sid", [
     "",
     "short",
-    SID.upper(),                      # только строчные hex, как у uuid4().hex
+    SID.upper(),                      # lowercase hex only, like uuid4().hex
     SID[:-1] + "g",
     SID + "0",
     "x; drop database postgres; --",

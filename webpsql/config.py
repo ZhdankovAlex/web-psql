@@ -1,4 +1,4 @@
-"""Настройки из переменных окружения."""
+"""Settings from environment variables."""
 
 from __future__ import annotations
 
@@ -7,31 +7,31 @@ from dataclasses import dataclass, field
 
 
 def _env_int(name: str, default: int) -> int:
-    """Прочитать целое число из окружения.
+    """Read an integer from the environment.
 
-    :param name: имя переменной.
-    :param default: значение, если переменная не задана.
-    :return: значение переменной или ``default``.
+    :param name: variable name.
+    :param default: value when the variable is not set.
+    :return: the variable value or ``default``.
     """
     return int(os.environ.get(name, default))
 
 
 @dataclass(frozen=True)
 class Settings:
-    """Общие настройки gateway и worker.
+    """Settings shared by the gateway and the worker.
 
-    :ivar redis_url: адрес Redis.
-    :ivar psql_args: команда, которая запускается в каждом терминале.
-    :ivar max_sessions: сколько терминалов одновременно держит один worker.
-    :ivar heartbeat_ttl: сколько секунд ждать браузер после обрыва связи; потом psql завершается.
-    :ivar stream_maxlen: сколько последних кусков вывода хранить в потоке (для переподключения).
-    :ivar admin_dsn: подключение суперпользователя — worker создаёт им песочницы.
-    :ivar pg_host: адрес PostgreSQL для psql.
-    :ivar pg_port: порт PostgreSQL для psql.
-    :ivar sandbox_user: пользователь ОС, от имени которого запускается psql
-        (``None`` — от имени самого worker'а; так удобно при локальной разработке).
-    :ivar sandbox_nproc: сколько процессов одновременно может быть у этого пользователя
-        (защита от fork-бомбы через ``\\!`` в psql).
+    :ivar redis_url: Redis address.
+    :ivar psql_args: command started in every terminal.
+    :ivar max_sessions: how many terminals one worker runs at the same time.
+    :ivar heartbeat_ttl: how many seconds to wait for the browser after a dropped connection; then psql is stopped.
+    :ivar stream_maxlen: how many recent pieces of output to keep in the stream (for reconnects).
+    :ivar admin_dsn: superuser connection — the worker creates sandboxes with it.
+    :ivar pg_host: PostgreSQL host for psql.
+    :ivar pg_port: PostgreSQL port for psql.
+    :ivar sandbox_user: OS user that runs psql
+        (``None`` — the worker's own user; handy for local development).
+    :ivar sandbox_nproc: how many processes that user may have at once
+        (protection against a fork bomb through ``\\!`` in psql).
     """
 
     redis_url: str = field(default_factory=lambda: os.environ.get("REDIS_URL", "redis://localhost:6379/0"))

@@ -1,76 +1,78 @@
-# Песочница: что можно сломать и что нельзя
+# The sandbox: what you can break and what you cannot
 
-Каждая сессия получает **свою копию учебной базы** и **своего пользователя PostgreSQL**.
-Свою копию можно разнести как угодно. После «Начать заново» или закрытия вкладки она
-удаляется, и следующая сессия начинается с исходных данных.
+Every session gets **its own copy of the demo database** and **its own PostgreSQL user**.
+You can wreck your copy however you like. After “Start over” or closing the tab it is dropped,
+and the next session starts with the original data.
 
-## Как устроено
+## How it is set up
 
-При первом запуске PostgreSQL выполняется
-[`db/init/00-sandbox-template.sql`](../db/init/00-sandbox-template.sql):
+On the first PostgreSQL start
+[`db/init/00-sandbox-template.sql`](../db/init/00-sandbox-template.sql) runs:
 
-- создаётся пользователь `sandbox_owner`. Войти под ним нельзя, он нужен только как владелец
-  всех таблиц учебной базы;
-- создаётся база `bookstore_template` с учебными данными и помечается как шаблон.
-  Подключиться к ней нельзя, из неё можно только делать копии;
-- со служебных баз `postgres` и `template1` снимается право подключения, которое по умолчанию
-  есть у всех.
+- it creates the user `sandbox_owner`. Nobody can log in as it; it only exists to own every
+  table in the demo database;
+- it creates the `bookstore_template` database with the demo data and marks it as a template.
+  Nobody can connect to it; it can only be copied;
+- it takes away the right to connect to the system databases `postgres` and `template1`,
+  which everyone has by default.
 
-Когда открывается сессия, worker ([`webpsql/sandbox.py`](../webpsql/sandbox.py)) выполняет:
+When a session opens, the worker ([`webpsql/sandbox.py`](../webpsql/sandbox.py)) runs:
 
 ```sql
-create role s_<id> login password '<случайный>' connection limit 3 in role sandbox_owner;
-alter role s_<id> set statement_timeout = '30s';                     -- запрос дольше 30 с прерывается
-alter role s_<id> set idle_in_transaction_session_timeout = '5min';  -- брошенная транзакция закрывается через 5 мин
-alter role s_<id> set temp_file_limit = '256MB';                     -- предел временных файлов на диске
+create role s_<id> login password '<random>' connection limit 3 in role sandbox_owner;
+alter role s_<id> set statement_timeout = '30s';                     -- a query longer than 30 s is cancelled
+alter role s_<id> set idle_in_transaction_session_timeout = '5min';  -- an abandoned transaction is closed after 5 min
+alter role s_<id> set temp_file_limit = '256MB';                     -- limit on temporary files on disk
 create database sbx_<id> template bookstore_template owner s_<id>;
 revoke connect on database sbx_<id> from public;
 ```
 
-Когда сессия закрывается — `drop database sbx_<id> with (force); drop role s_<id>;`.
+When the session ends — `drop database sbx_<id> with (force); drop role s_<id>;`.
 
-Пользователь сессии входит в группу `sandbox_owner`, поэтому в своей копии может менять
-и удалять любые таблицы. Подключиться к другим базам он не может: право подключения к ним
-есть только у их владельцев, а владелец у каждой копии свой.
+The session user is a member of `sandbox_owner`, so it can change and drop any table in its
+own copy. It cannot connect to any other database: only their owners have the right to connect,
+and every copy has its own owner.
 
-## Что проверено руками
+## Tested by hand
 
-| Что делаем | Что получаем |
+| What we do | What we get |
 |---|---|
-| `drop table orders, order_items cascade;` | работает — это своя копия |
-| после этого «Начать заново» и `select count(*) from books;` | 30 — данные снова на месте |
-| `drop database sbx_<своя>;` | нельзя удалить базу, к которой подключён, а к другим подключиться нельзя |
+| `drop table orders, order_items cascade;` | works — it is your own copy |
+| then “Start over” and `select count(*) from books;` | 30 — the data is back |
+| `drop database sbx_<own>;` | you cannot drop the database you are connected to, and you cannot connect to any other |
 | `drop database bookstore_template;` | `cannot drop a template database` |
-| `\c postgres`, `\c sbx_<чужая>` | `permission denied … User does not have CONNECT privilege` |
+| `\c postgres`, `\c sbx_<someone else's>` | `permission denied … User does not have CONNECT privilege` |
 | `copy (select 1) to program 'id';` | `permission denied to COPY to or from an external program` |
 | `alter system set work_mem = '1GB';` | `permission denied to set parameter` |
-| `\! id` | `uid=2000(sandbox)` — не администратор и не тот пользователь, от которого работает worker |
-| `\! env`, `\! cat /proc/1/environ` | в окружении только данные своей сессии; окружение worker'а прочитать нельзя (`Permission denied`) |
+| `\! id` | `uid=2000(sandbox)` — not an administrator and not the user the worker runs as |
+| `\! env`, `\! cat /proc/1/environ` | the environment holds only your own session's details; the worker's environment cannot be read (`Permission denied`) |
 
-## Команды ОС через `\!`
+The stack tests in CI check most of these on every push.
 
-psql умеет выполнять команды операционной системы: `\!`, `\o |команда`, `\g |команда`,
-`\copy … program`. Отключить это нельзя, поэтому у пользователя по сути есть командная
-строка **внутри контейнера worker'а**. Чтобы она ничего не могла испортить:
+## OS commands through `\!`
 
-- psql запускается от отдельного пользователя ОС `sandbox`, а не от того, под которым работает worker;
-- psql получает только данные для подключения к своей копии базы. Пароля администратора
-  PostgreSQL и адреса Redis в его окружении нет;
-- прочитать окружение самого worker'а пользователь `sandbox` не может;
-- число процессов у пользователя `sandbox` и память контейнера ограничены: если запустить
-  бесконечное размножение процессов, оно упрётся в предел;
-- история команд psql не сохраняется в файл: файл был бы общим у всех сессий.
+psql can run operating system commands: `\!`, `\o |command`, `\g |command`,
+`\copy … program`. This cannot be turned off, so the user effectively has a shell **inside the
+worker container**. To keep that shell harmless:
 
-## Чего песочница не закрывает
+- psql runs as a separate OS user, `sandbox`, not as the user the worker runs as;
+- psql gets only the details for connecting to its own copy. The PostgreSQL administrator
+  password and the Redis address are not in its environment;
+- the `sandbox` user cannot read the worker's own environment;
+- the number of processes for `sandbox` and the container memory are capped: an endless
+  process fork bomb hits the limit;
+- psql command history is not saved to a file: the file would be shared by all sessions.
 
-Проект рассчитан на запуск у себя. Прежде чем открывать доступ другим людям, нужно решить:
+## What the sandbox does not cover
 
-- **Сеть.** Из командной строки через `\!` видны Redis и PostgreSQL. Паролей пользователь
-  не знает, но пароли по умолчанию (`web-psql`) записаны в репозитории — задайте свои в `.env`.
-  Надёжнее запускать psql в отдельном контейнере, у которого нет доступа к Redis.
-- **Общая домашняя папка.** Файл, который одна сессия запишет через `\!` в `/home/sandbox`,
-  увидит следующая.
-- **Нагрузка.** Ограничение в 30 секунд на запрос пользователь может снять у себя
-  (`set statement_timeout = 0`), и тяжёлый запрос займёт процессор сервера. Размер копии базы
-  ограничен только диском.
-- **Вход.** Пароля нет: любой, кто открыл страницу, получает терминал.
+The project is meant to be run on your own machine. Before letting other people in, decide on:
+
+- **Network.** From a shell through `\!`, Redis and PostgreSQL are reachable. The user does not
+  know the passwords, but the default ones (`web-psql`) are in the repository — set your own in
+  `.env`. It is safer to run psql in a separate container with no access to Redis.
+- **Shared home directory.** A file one session writes to `/home/sandbox` through `\!`
+  is visible to the next one.
+- **Load.** The user can lift the 30-second query limit for themselves
+  (`set statement_timeout = 0`), and a heavy query will keep the server CPU busy. The size of a
+  database copy is limited only by the disk.
+- **Login.** There is no password: anyone who opens the page gets a terminal.
