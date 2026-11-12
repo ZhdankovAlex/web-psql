@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+
+[tool.ruff.lint]
+# ошибки и предупреждения pycodestyle, pyflakes, порядок импортов, bugbear, pyupgrade
+select = ["E", "W", "F", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# пакет webpsql импортируется из корня проекта без установки
+pythonpath = ["."]
+markers = [
+    "stand: тест на запущенном стенде (docker compose up); пропускается, если стенд недоступен",
+]

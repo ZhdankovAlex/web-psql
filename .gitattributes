@@ -1,0 +1,3 @@
+# Всё текстовое — с переводами строк LF: SQL, psqlrc и скрипты выполняются в Linux-контейнерах.
+* text=auto eol=lf
+*.png binary

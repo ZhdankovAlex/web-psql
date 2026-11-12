@@ -1,0 +1,11 @@
+-r requirements.txt
+pytest>=8.0
+# TestClient FastAPI
+httpx>=0.27
+# Redis в памяти для быстрых тестов gateway
+fakeredis>=2.26
+# клиент WebSocket для тестов на стенде
+websockets>=13
+# версия зафиксирована до минорной: новые выпуски ruff добавляют правила
+# и могут уронить CI без изменений в коде
+ruff~=0.17.1
